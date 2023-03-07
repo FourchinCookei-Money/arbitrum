@@ -21,12 +21,20 @@ pragma solidity ^0.6.11;
 import "../challenge/ChallengeLib.sol";
 import "./INode.sol";
 
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 library RollupLib {
+    using SafeMath for uint256;
+
     struct Config {
         bytes32 machineHash;
         uint256 confirmPeriodBlocks;
         uint256 extraChallengeTimeBlocks;
-        uint256 arbGasSpeedLimitPerBlock;
+        uint256 avmGasSpeedLimitPerBlock;
         uint256 baseStake;
         address stakeToken;
         address owner;
@@ -138,6 +146,14 @@ library RollupLib {
             );
     }
 
+    function assertionGasUsed(RollupLib.Assertion memory assertion)
+        internal
+        pure
+        returns (uint256)
+    {
+        return assertion.afterState.gasUsed.sub(assertion.beforeState.gasUsed);
+    }
+
     function challengeRoot(
         Assertion memory assertion,
         bytes32 assertionExecHash,
@@ -215,9 +231,5 @@ library RollupLib {
     ) internal pure returns (bytes32) {
         uint8 hasSiblingInt = hasSibling ? 1 : 0;
         return keccak256(abi.encodePacked(hasSiblingInt, lastHash, assertionExecHash, inboxAcc));
-    }
-
-    function nodeAccumulator(bytes32 prevAcc, bytes32 newNodeHash) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(prevAcc, newNodeHash));
     }
 }

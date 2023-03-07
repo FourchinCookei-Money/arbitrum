@@ -18,6 +18,7 @@
 
 pragma solidity ^0.6.11;
 
+import { ArbitrumEnabledToken } from "../ICustomToken.sol";
 import "./L1ArbitrumExtendedGateway.sol";
 import "../../arbitrum/gateway/L2CustomGateway.sol";
 import "../../libraries/gateway/ICustomGateway.sol";
@@ -28,6 +29,7 @@ import "arb-bridge-eth/contracts/libraries/Whitelist.sol";
 /**
  * @title Gatway for "custom" bridging functionality
  * @notice Handles some (but not all!) custom Gateway needs.
+ * @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
  */
 contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
     using Address for address;
@@ -36,80 +38,83 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
     // owner is able to force add custom mappings
     address public owner;
 
-    /// start whitelist consumer
+    // whitelist not used anymore
     address public whitelist;
 
-    event WhitelistSourceUpdated(address newSource);
+    // start of inline reentrancy guard
+    // https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v3.4.2/contracts/utils/ReentrancyGuard.sol
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+    uint256 private _status;
 
-    modifier onlyWhitelisted {
-        if (whitelist != address(0)) {
-            require(Whitelist(whitelist).isAllowed(msg.sender), "NOT_WHITELISTED");
-        }
+    modifier nonReentrant() {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+        // Any calls to nonReentrant after this point will fail
+        _status = _ENTERED;
+        _;
+        _status = _NOT_ENTERED;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "ONLY_OWNER");
         _;
     }
 
-    function updateWhitelistSource(address newSource) external {
-        require(msg.sender == whitelist, "NOT_FROM_LIST");
-        whitelist = newSource;
-        emit WhitelistSourceUpdated(newSource);
+    function outboundTransferCustomRefund(
+        address _l1Token,
+        address _refundTo,
+        address _to,
+        uint256 _amount,
+        uint256 _maxGas,
+        uint256 _gasPriceBid,
+        bytes calldata _data
+    ) public payable override nonReentrant returns (bytes memory res) {
+        return
+            super.outboundTransferCustomRefund(
+                _l1Token,
+                _refundTo,
+                _to,
+                _amount,
+                _maxGas,
+                _gasPriceBid,
+                _data
+            );
     }
 
-    // end whitelist consumer
+    function finalizeInboundTransfer(
+        address _token,
+        address _from,
+        address _to,
+        uint256 _amount,
+        bytes calldata _data
+    ) public payable override nonReentrant {
+        // the superclass checks onlyCounterpartGateway
+        super.finalizeInboundTransfer(_token, _from, _to, _amount, _data);
+    }
 
     function initialize(
         address _l1Counterpart,
         address _l1Router,
         address _inbox,
         address _owner
-    ) public virtual {
-        L1ArbitrumExtendedGateway._initialize(_l1Counterpart, _l1Router, _inbox);
+    ) public {
+        L1ArbitrumGateway._initialize(_l1Counterpart, _l1Router, _inbox);
         owner = _owner;
         // disable whitelist by default
         whitelist = address(0);
-    }
-
-    function postUpgradeInit() external {
-        require(whitelist == address(0), "ALREADY_INIT");
-        router = address(0x72Ce9c846789fdB6fC1f34aC4AD25Dd9ef7031ef);
-        whitelist = address(0xD485e5c28AA4985b23f6DF13dA03caa766dcd459);
-    }
-
-    /**
-     * @notice Deposit ERC20 token from Ethereum into Arbitrum. If L2 side hasn't been deployed yet, includes name/symbol/decimals data for initial L2 deploy. Initiate by GatewayRouter.
-     * @param _l1Token L1 address of ERC20
-     * @param _to account to be credited with the tokens in the L2 (can be the user's L2 account or a contract)
-     * @param _amount Token Amount
-     * @param _maxGas Max gas deducted from user's L2 balance to cover L2 execution
-     * @param _gasPriceBid Gas price for L2 execution
-     * @param _data encoded data from router and user
-     * @return res abi encoded inbox sequence number
-     */
-    //  * @param maxSubmissionCost Max gas deducted from user's L2 balance to cover base submission fee
-    function outboundTransfer(
-        address _l1Token,
-        address _to,
-        uint256 _amount,
-        uint256 _maxGas,
-        uint256 _gasPriceBid,
-        bytes calldata _data
-    ) public payable virtual override onlyWhitelisted returns (bytes memory) {
-        return super.outboundTransfer(_l1Token, _to, _amount, _maxGas, _gasPriceBid, _data);
+        // reentrancy guard
+        _status = _NOT_ENTERED;
     }
 
     /**
      * @notice Calculate the address used when bridging an ERC20 token
-     * @dev this always returns the same as the L1 oracle, but may be out of date.
+     * @dev the L1 and L2 address oracles may not always be in sync.
      * For example, a custom token may have been registered but not deploy or the contract self destructed.
      * @param l1ERC20 address of L1 token
      * @return L2 address of a bridged ERC20 token
      */
-    function _calculateL2TokenAddress(address l1ERC20)
-        internal
-        view
-        virtual
-        override
-        returns (address)
-    {
+    function calculateL2TokenAddress(address l1ERC20) public view override returns (address) {
         return l1ToL2Token[l1ERC20];
     }
 
@@ -126,19 +131,18 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
         uint256 _maxGas,
         uint256 _gasPriceBid,
         uint256 _maxSubmissionCost
-    ) external payable virtual returns (uint256) {
+    ) external payable returns (uint256) {
         return registerTokenToL2(_l2Address, _maxGas, _gasPriceBid, _maxSubmissionCost, msg.sender);
     }
 
     /**
      * @notice Allows L1 Token contract to trustlessly register its custom L2 counterpart.
-
-     * @param _l2Address counterpart address of L1 token
-     * @param _maxGas max gas for L2 retryable exrecution 
-     * @param _gasPriceBid gas price for L2 retryable ticket 
-     * @param  _maxSubmissionCost base submission cost  L2 retryable tick3et 
-     * @param _creditBackAddress address for crediting back overpayment of _maxSubmissionCost
-     * @return Retryable ticket ID
+     * param _l2Address counterpart address of L1 token
+     * param _maxGas max gas for L2 retryable exrecution
+     * param _gasPriceBid gas price for L2 retryable ticket
+     * param  _maxSubmissionCost base submission cost  L2 retryable tick3et
+     * param _creditBackAddress address for crediting back overpayment of _maxSubmissionCost
+     * return Retryable ticket ID
      */
     function registerTokenToL2(
         address _l2Address,
@@ -146,8 +150,18 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
         uint256 _gasPriceBid,
         uint256 _maxSubmissionCost,
         address _creditBackAddress
-    ) public payable virtual returns (uint256) {
-        require(address(msg.sender).isContract(), "MUST_BE_CONTRACT");
+    ) public payable returns (uint256) {
+        require(
+            ArbitrumEnabledToken(msg.sender).isArbitrumEnabled() == uint8(0xa4b1),
+            "NOT_ARB_ENABLED"
+        );
+
+        address currL2Addr = l1ToL2Token[msg.sender];
+        if (currL2Addr != address(0)) {
+            // if token is already set, don't allow it to set a different L2 address
+            require(currL2Addr == _l2Address, "NO_UPDATE_TO_DIFFERENT_ADDR");
+        }
+
         l1ToL2Token[msg.sender] = _l2Address;
 
         address[] memory l1Addresses = new address[](1);
@@ -157,14 +171,29 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
 
         emit TokenSet(l1Addresses[0], l2Addresses[0]);
 
-        bytes memory _data =
-            abi.encodeWithSelector(
-                L2CustomGateway.registerTokenFromL1.selector,
-                l1Addresses,
-                l2Addresses
-            );
+        bytes memory _data = abi.encodeWithSelector(
+            L2CustomGateway.registerTokenFromL1.selector,
+            l1Addresses,
+            l2Addresses
+        );
 
-        return sendTxToL2(_creditBackAddress, 0, _maxSubmissionCost, _maxGas, _gasPriceBid, _data);
+        return
+            sendTxToL2(
+                inbox,
+                counterpartGateway,
+                _creditBackAddress,
+                msg.value,
+                0,
+                _maxSubmissionCost,
+                _maxGas,
+                _gasPriceBid,
+                _data
+            );
+    }
+
+    function setOwner(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "INVALID_OWNER");
+        owner = newOwner;
     }
 
     /**
@@ -183,8 +212,7 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
         uint256 _maxGas,
         uint256 _gasPriceBid,
         uint256 _maxSubmissionCost
-    ) external payable virtual returns (uint256) {
-        require(msg.sender == owner, "ONLY_OWNER");
+    ) external payable onlyOwner returns (uint256) {
         require(_l1Addresses.length == _l2Addresses.length, "INVALID_LENGTHS");
 
         for (uint256 i = 0; i < _l1Addresses.length; i++) {
@@ -194,13 +222,23 @@ contract L1CustomGateway is L1ArbitrumExtendedGateway, ICustomGateway {
             emit TokenSet(_l1Addresses[i], _l2Addresses[i]);
         }
 
-        bytes memory _data =
-            abi.encodeWithSelector(
-                L2CustomGateway.registerTokenFromL1.selector,
-                _l1Addresses,
-                _l2Addresses
-            );
+        bytes memory _data = abi.encodeWithSelector(
+            L2CustomGateway.registerTokenFromL1.selector,
+            _l1Addresses,
+            _l2Addresses
+        );
 
-        return sendTxToL2(msg.sender, 0, _maxSubmissionCost, _maxGas, _gasPriceBid, _data);
+        return
+            sendTxToL2(
+                inbox,
+                counterpartGateway,
+                msg.sender,
+                msg.value,
+                0,
+                _maxSubmissionCost,
+                _maxGas,
+                _gasPriceBid,
+                _data
+            );
     }
 }

@@ -20,6 +20,10 @@ pragma solidity ^0.6.11;
 
 import "../arch/OneStepProof2.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract BufferProofTester is OneStepProof2 {
     event OneStepProofResult(uint64 gas, uint256 totalMessagesRead, bytes32[4] fields);
 
@@ -63,14 +67,9 @@ contract BufferProofTester is OneStepProof2 {
         bytes calldata bproof
     ) external {
         address[2] memory bridges;
-        (uint64 gas, uint256 totalMessagesRead, bytes32[4] memory fields) =
-            OneStepProof2(address(this)).executeStep(
-                bridges,
-                initialMessagesRead,
-                [initialSendAcc, initialLogAcc],
-                proof,
-                bproof
-            );
+        (uint64 gas, uint256 totalMessagesRead, bytes32[4] memory fields) = OneStepProof2(
+            address(this)
+        ).executeStep(bridges, initialMessagesRead, [initialSendAcc, initialLogAcc], proof, bproof);
         emit OneStepProofResult(gas, totalMessagesRead, fields);
     }
 }

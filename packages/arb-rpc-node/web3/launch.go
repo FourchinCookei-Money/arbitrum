@@ -22,47 +22,88 @@ import (
 
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/rs/zerolog/log"
 
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/metrics"
+	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridge"
+	"github.com/offchainlabs/arbitrum/packages/arb-node-core/monitor"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/aggregator"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 )
 
-func GenerateWeb3Server(server *aggregator.Server, privateKeys []*ecdsa.PrivateKey, ganacheMode bool, plugins map[string]interface{}, metricsConfig *metrics.MetricsConfig) (*rpc.Server, error) {
+var (
+	logger = log.With().Caller().Str("component", "web3").Logger()
+)
+
+type ServerConfig struct {
+	Mode          configuration.RpcMode
+	MaxCallAVMGas uint64
+	Tracing       configuration.Tracing
+	DevopsStubs   bool
+}
+
+func GenerateWeb3Server(server *aggregator.Server, privateKeys []*ecdsa.PrivateKey, config ServerConfig, coreConfig *configuration.Core, plugins map[string]interface{}, inboxReader *monitor.InboxReader) (*rpc.Server, error) {
 	s := rpc.NewServer()
 
-	ethServer := NewServer(server, ganacheMode, metricsConfig)
+	var sequencerInboxWatcher *ethbridge.SequencerInboxWatcher
+	if inboxReader != nil {
+		sequencerInboxWatcher = inboxReader.GetSequencerInboxWatcher()
+	}
 
-	if err := s.RegisterName("eth", ethServer); err != nil {
+	ethServer := NewServer(server, config, sequencerInboxWatcher)
+	forwarderServer := NewForwarderServer(server, ethServer, config.Mode)
+
+	if err := s.RegisterName("eth", forwarderServer); err != nil {
 		return nil, err
 	}
 
-	if err := s.RegisterName("eth", filters.NewPublicFilterAPI(server, false, 2*time.Minute)); err != nil {
-		return nil, err
+	if config.Mode != configuration.ForwardingOnlyRpcMode {
+		if err := s.RegisterName("eth", ethServer); err != nil {
+			return nil, err
+		}
+
+		if err := s.RegisterName("eth", filters.NewPublicFilterAPI(server, false, 2*time.Minute)); err != nil {
+			return nil, err
+		}
+
+		if err := s.RegisterName("eth", NewAccounts(ethServer, privateKeys, config.Mode == configuration.NonMutatingRpcMode)); err != nil {
+			return nil, err
+		}
+
+		if err := s.RegisterName("arb", &Arb{srv: server}); err != nil {
+			return nil, err
+		}
+
+		if config.Tracing.Enable {
+			tracer := NewTracer(ethServer, coreConfig)
+			if err := s.RegisterName(config.Tracing.Namespace, tracer); err != nil {
+				return nil, err
+			}
+		}
+
+		if len(privateKeys) > 0 {
+			if err := s.RegisterName("personal", NewPersonalAccounts(privateKeys)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	if err := s.RegisterName("eth", NewAccounts(ethServer, privateKeys, metricsConfig)); err != nil {
-		return nil, err
-	}
-
-	if err := s.RegisterName("arb", &Arb{srv: server, counter: metricsConfig.MethodCallCounter}); err != nil {
-		return nil, err
-	}
-
-	if err := s.RegisterName("personal", NewPersonalAccounts(privateKeys, metricsConfig)); err != nil {
-		return nil, err
-	}
-
-	net := &Net{chainId: server.ChainId().Uint64(), counter: metricsConfig.MethodCallCounter}
+	net := &Net{chainId: server.ChainId().Uint64()}
 	if err := s.RegisterName("net", net); err != nil {
 		return nil, err
 	}
 
-	if err := s.RegisterName("web3", &Web3{counter: metricsConfig.MethodCallCounter}); err != nil {
+	if err := s.RegisterName("web3", &Web3{}); err != nil {
 		return nil, err
 	}
 
 	for name, val := range plugins {
 		if err := s.RegisterName(name, val); err != nil {
+			return nil, err
+		}
+	}
+
+	if config.DevopsStubs {
+		if err := registerDevopsStubs(s); err != nil {
 			return nil, err
 		}
 	}

@@ -19,9 +19,13 @@ package broadcastclient
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"fmt"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,20 +33,21 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
-
-	"github.com/rs/zerolog/log"
-
 	"github.com/offchainlabs/arbitrum/packages/arb-util/broadcaster"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/wsbroadcastserver"
 )
 
 type BroadcastClient struct {
-	websocketUrl    string
-	lastInboxSeqNum *big.Int
+	websocketUrl string
+
+	mostRecentSeqNum *big.Int
+
+	chainId uint64
 
 	connMutex *sync.Mutex
 	conn      net.Conn
+	errChan   chan error
 
 	retryMutex *sync.Mutex
 	retryCount int
@@ -53,38 +58,50 @@ type BroadcastClient struct {
 	idleTimeout                  time.Duration
 }
 
-var logger = log.With().Caller().Str("component", "broadcaster").Logger()
+var logger = arblog.Logger.With().Str("component", "broadcaster").Logger()
 
-func NewBroadcastClient(websocketUrl string, lastInboxSeqNum *big.Int, idleTimeout time.Duration) *BroadcastClient {
-	var seqNum *big.Int
-	if lastInboxSeqNum == nil {
-		seqNum = big.NewInt(0)
+func NewBroadcastClient(
+	websocketUrl string,
+	chainId uint64,
+	currentMessageCount *big.Int,
+	idleTimeout time.Duration,
+	broadcastClientErrChan chan error,
+) *BroadcastClient {
+	var mostRecentSeqNum *big.Int
+	if currentMessageCount == nil || currentMessageCount.Cmp(big.NewInt(0)) <= 0 {
+		mostRecentSeqNum = nil
 	} else {
-		seqNum = lastInboxSeqNum
+		mostRecentSeqNum = new(big.Int).Sub(currentMessageCount, big.NewInt(1))
 	}
 
 	return &BroadcastClient{
-		websocketUrl:    websocketUrl,
-		lastInboxSeqNum: seqNum,
-		connMutex:       &sync.Mutex{},
-		retryMutex:      &sync.Mutex{},
-		idleTimeout:     idleTimeout,
+		websocketUrl:     websocketUrl,
+		chainId:          chainId,
+		mostRecentSeqNum: mostRecentSeqNum,
+		connMutex:        &sync.Mutex{},
+		errChan:          broadcastClientErrChan,
+		retryMutex:       &sync.Mutex{},
+		idleTimeout:      idleTimeout,
 	}
 }
 
 func (bc *BroadcastClient) Connect(ctx context.Context) (chan broadcaster.BroadcastFeedMessage, error) {
 	messageReceiver := make(chan broadcaster.BroadcastFeedMessage)
 
-	return messageReceiver, bc.ConnectWithChannel(ctx, messageReceiver)
+	err := bc.ConnectWithChannel(ctx, messageReceiver)
+	if err != nil {
+		return nil, err
+	}
+	return messageReceiver, nil
 }
 
 func (bc *BroadcastClient) ConnectWithChannel(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage) error {
-	_, err := bc.connect(ctx, messageReceiver)
+	earlyFrameData, _, err := bc.connect(ctx, messageReceiver, bc.mostRecentSeqNum)
 	if err != nil {
 		return err
 	}
 
-	bc.startBackgroundReader(ctx, messageReceiver)
+	bc.startBackgroundReader(ctx, messageReceiver, earlyFrameData)
 
 	return nil
 }
@@ -107,34 +124,94 @@ func (bc *BroadcastClient) ConnectInBackground(ctx context.Context, messageRecei
 	})()
 }
 
-func (bc *BroadcastClient) connect(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage) (chan broadcaster.BroadcastFeedMessage, error) {
+var ErrIncorrectFeedServerVersion = errors.New("incorrect feed server version")
+var ErrIncorrectChainId = errors.New("incorrect chain id")
+
+func (bc *BroadcastClient) connect(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage, mostRecentSequenceNumber *big.Int) (io.Reader, chan broadcaster.BroadcastFeedMessage, error) {
 
 	if len(bc.websocketUrl) == 0 {
 		// Nothing to do
-		return nil, nil
+		return nil, nil, nil
 	}
 
+	var requestedSequenceNumber string
+	if mostRecentSequenceNumber == nil {
+		requestedSequenceNumber = "0"
+	} else {
+		requestedSequenceNumber = new(big.Int).Add(mostRecentSequenceNumber, big.NewInt(1)).String()
+	}
+	header := ws.HandshakeHeaderHTTP(http.Header{
+		wsbroadcastserver.HTTPHeaderFeedClientVersion:       []string{strconv.Itoa(wsbroadcastserver.FeedClientVersion)},
+		wsbroadcastserver.HTTPHeaderRequestedSequenceNumber: []string{requestedSequenceNumber},
+	})
+
 	logger.Info().Str("url", bc.websocketUrl).Msg("connecting to arbitrum inbox message broadcaster")
+	var feedServerVersion uint64
 	timeoutDialer := ws.Dialer{
+		Header: header,
+		OnHeader: func(key, value []byte) (err error) {
+			headerName := string(key)
+			headerValue := string(value)
+			if headerName == wsbroadcastserver.HTTPHeaderFeedServerVersion {
+				feedServerVersion, err = strconv.ParseUint(headerValue, 0, 64)
+				if err != nil {
+					return err
+				}
+				if feedServerVersion != wsbroadcastserver.FeedServerVersion {
+					logger.
+						Error().
+						Uint64("expectedFeedServerVersion", wsbroadcastserver.FeedServerVersion).
+						Uint64("actualFeedServerVersion", feedServerVersion).
+						Msg("incorrect feed server version")
+					return ErrIncorrectFeedServerVersion
+				}
+			} else if headerName == wsbroadcastserver.HTTPHeaderChainId {
+				chainId, err := strconv.ParseUint(headerValue, 0, 64)
+				if err != nil {
+					return err
+				}
+				if chainId != bc.chainId {
+					logger.
+						Error().
+						Uint64("expectedChainId", bc.chainId).
+						Uint64("actualChainId", chainId).
+						Msg("incorrect chain id when connecting to server feed")
+					return ErrIncorrectChainId
+				}
+			}
+			return nil
+		},
 		Timeout: 10 * time.Second,
 	}
 
-	conn, _, _, err := timeoutDialer.Dial(ctx, bc.websocketUrl)
+	conn, br, _, err := timeoutDialer.Dial(ctx, bc.websocketUrl)
 	if err != nil {
 		logger.Warn().Err(err).Msg("broadcast client unable to connect")
-		return nil, errors.Wrap(err, "broadcast client unable to connect")
+		return nil, nil, errors.Wrap(err, "broadcast client unable to connect")
+	}
+
+	var earlyFrameData io.Reader
+	if br != nil {
+		// Depending on how long the client takes to read the response, there may be
+		// data after the WebSocket upgrade response in a single read from the socket,
+		// ie WebSocket frames sent by the server. If this happens, Dial returns
+		// a non-nil bufio.Reader so that data isn't lost. But beware, this buffered
+		// reader is still hooked up to the socket; trying to read past what had already
+		// been buffered will do a blocking read on the socket, so we have to wrap it
+		// in a LimitedReader.
+		earlyFrameData = io.LimitReader(br, int64(br.Buffered()))
 	}
 
 	bc.connMutex.Lock()
 	bc.conn = conn
 	bc.connMutex.Unlock()
 
-	logger.Info().Msg("Connected")
+	logger.Info().Uint64("chainId", bc.chainId).Uint64("feedServerVersion", feedServerVersion).Msg("Connected")
 
-	return messageReceiver, nil
+	return earlyFrameData, messageReceiver, nil
 }
 
-func (bc *BroadcastClient) startBackgroundReader(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage) {
+func (bc *BroadcastClient) startBackgroundReader(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage, earlyFrameData io.Reader) {
 	go func() {
 		for {
 			select {
@@ -143,18 +220,20 @@ func (bc *BroadcastClient) startBackgroundReader(ctx context.Context, messageRec
 			default:
 			}
 
-			msg, op, err := bc.readData(ctx, ws.StateClientSide)
+			msg, op, err := wsbroadcastserver.ReadData(ctx, bc.conn, earlyFrameData, bc.idleTimeout, ws.StateClientSide)
 			if err != nil {
 				if bc.shuttingDown {
 					return
 				}
 				if strings.Contains(err.Error(), "i/o timeout") {
 					logger.Error().Str("feed", bc.websocketUrl).Msg("Server connection timed out without receiving data")
+				} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					logger.Warn().Err(err).Str("feed", bc.websocketUrl).Int("opcode", int(op)).Msgf("readData returned EOF")
 				} else {
 					logger.Error().Err(err).Str("feed", bc.websocketUrl).Int("opcode", int(op)).Msgf("error calling readData")
 				}
 				_ = bc.conn.Close()
-				bc.RetryConnect(ctx, messageReceiver)
+				earlyFrameData = bc.RetryConnect(ctx, messageReceiver)
 				continue
 			}
 
@@ -175,74 +254,30 @@ func (bc *BroadcastClient) startBackgroundReader(ctx context.Context, messageRec
 				}
 
 				if res.Version == 1 {
-					for _, message := range res.Messages {
-						messageReceiver <- *message
+					messageCount := len(res.Messages)
+					if messageCount > 0 {
+						for _, message := range res.Messages {
+							messageReceiver <- *message
+						}
+						lastLastSeqNum := res.Messages[messageCount-1].FeedItem.BatchItem.LastSeqNum
+						if lastLastSeqNum != nil {
+							bc.mostRecentSeqNum = new(big.Int).Add(lastLastSeqNum, big.NewInt(1))
+						}
 					}
 
 					if res.ConfirmedAccumulator.IsConfirmed && bc.ConfirmedAccumulatorListener != nil {
 						bc.ConfirmedAccumulatorListener <- res.ConfirmedAccumulator.Accumulator
 					}
+				} else if res.Version >= 2 {
+					bc.errChan <- fmt.Errorf("connected to nitro feed with classic client, server version: %d", res.Version)
+					break
+				} else {
+					bc.errChan <- fmt.Errorf("unrecognized feed version, server version: %d", res.Version)
+					break
 				}
 			}
 		}
 	}()
-}
-
-func (bc *BroadcastClient) readData(ctx context.Context, state ws.State) ([]byte, ws.OpCode, error) {
-	controlHandler := wsutil.ControlFrameHandler(bc.conn, state)
-	reader := wsutil.Reader{
-		Source:          bc.conn,
-		State:           state,
-		CheckUTF8:       true,
-		SkipHeaderCheck: false,
-		OnIntermediate:  controlHandler,
-	}
-
-	// Remove timeout when leaving this function
-	defer func(conn net.Conn) {
-		err := conn.SetReadDeadline(time.Time{})
-		if err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-			logger.Error().Err(err).Msg("error removing read deadline")
-		}
-	}(bc.conn)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, 0, nil
-		default:
-		}
-
-		err := bc.conn.SetReadDeadline(time.Now().Add(bc.idleTimeout))
-		if err != nil {
-			return nil, 0, err
-		}
-
-		// Control packet may be returned even if err set
-		header, err := reader.NextFrame()
-		if header.OpCode.IsControl() {
-			// Control packet may be returned even if err set
-			if err2 := controlHandler(header, &reader); err != nil {
-				return nil, 0, err2
-			}
-			continue
-		}
-		if err != nil {
-			return nil, 0, err
-		}
-
-		if header.OpCode != ws.OpText &&
-			header.OpCode != ws.OpBinary {
-			if err := reader.Discard(); err != nil {
-				return nil, 0, err
-			}
-			continue
-		}
-
-		data, err := ioutil.ReadAll(&reader)
-
-		return data, header.OpCode, err
-	}
 }
 
 func (bc *BroadcastClient) GetRetryCount() int {
@@ -252,7 +287,7 @@ func (bc *BroadcastClient) GetRetryCount() int {
 	return bc.retryCount
 }
 
-func (bc *BroadcastClient) RetryConnect(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage) {
+func (bc *BroadcastClient) RetryConnect(ctx context.Context, messageReceiver chan broadcaster.BroadcastFeedMessage) io.Reader {
 	bc.retryMutex.Lock()
 	defer bc.retryMutex.Unlock()
 
@@ -262,21 +297,23 @@ func (bc *BroadcastClient) RetryConnect(ctx context.Context, messageReceiver cha
 	for !bc.shuttingDown {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(waitDuration):
 		}
 
 		bc.retryCount++
-		_, err := bc.connect(ctx, messageReceiver)
+		earlyFrameData, _, err := bc.connect(ctx, messageReceiver, bc.mostRecentSeqNum)
 		if err == nil {
 			bc.retrying = false
-			return
+			return earlyFrameData
 		}
 
 		if waitDuration < maxWaitDuration {
 			waitDuration += 500 * time.Millisecond
 		}
 	}
+
+	return nil
 }
 
 func (bc *BroadcastClient) Close() {

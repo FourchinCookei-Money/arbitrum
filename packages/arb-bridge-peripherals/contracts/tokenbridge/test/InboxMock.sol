@@ -22,10 +22,13 @@ import "arb-bridge-eth/contracts/bridge/interfaces/IOutbox.sol";
 import "arb-bridge-eth/contracts/bridge/interfaces/IBridge.sol";
 import "arb-bridge-eth/contracts/bridge/interfaces/IInbox.sol";
 
+/// @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
 contract InboxMock {
     address l2ToL1SenderMock = address(0);
 
     event TicketData(uint256 maxSubmissionCost);
+    event RefundAddresses(address excessFeeRefundAddress, address callValueRefundAddress);
+    event InboxRetryableTicket(address from, address to, uint256 value, uint256 maxGas, bytes data);
 
     function createRetryableTicket(
         address destAddr,
@@ -34,18 +37,20 @@ contract InboxMock {
         address excessFeeRefundAddress,
         address callValueRefundAddress,
         uint256 maxGas,
-        uint256 gasPriceBid,
+        uint256, /* gasPriceBid */
         bytes calldata data
     ) external payable returns (uint256) {
         emit TicketData(maxSubmissionCost);
+        emit RefundAddresses(excessFeeRefundAddress, callValueRefundAddress);
+        emit InboxRetryableTicket(msg.sender, destAddr, l2CallValue, maxGas, data);
         return 0;
     }
 
-    function bridge() external returns (IBridge) {
+    function bridge() external view returns (IBridge) {
         return IBridge(address(this));
     }
 
-    function activeOutbox() external returns (address) {
+    function activeOutbox() external view returns (address) {
         return address(this);
     }
 
@@ -53,7 +58,7 @@ contract InboxMock {
         l2ToL1SenderMock = sender;
     }
 
-    function l2ToL1Sender() external returns (address) {
+    function l2ToL1Sender() external view returns (address) {
         return l2ToL1SenderMock;
     }
 }

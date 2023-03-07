@@ -44,6 +44,7 @@ type ExecutionCursor struct {
 	totalSendCount    *big.Int
 	totalLogCount     *big.Int
 	totalSteps        *big.Int
+	l2BlockNumber     *big.Int
 }
 
 func deleteExecutionCursor(ac *ExecutionCursor) {
@@ -63,6 +64,7 @@ func NewExecutionCursor(c unsafe.Pointer) (*ExecutionCursor, error) {
 }
 
 func (ec *ExecutionCursor) Clone() core.ExecutionCursor {
+	defer runtime.KeepAlive(ec)
 	newEc := &ExecutionCursor{
 		c:                 C.executionCursorClone(ec.c),
 		machineHash:       ec.machineHash,
@@ -74,12 +76,14 @@ func (ec *ExecutionCursor) Clone() core.ExecutionCursor {
 		totalSendCount:    ec.totalSendCount,
 		totalLogCount:     ec.totalLogCount,
 		totalSteps:        ec.totalSteps,
+		l2BlockNumber:     ec.l2BlockNumber,
 	}
 	runtime.SetFinalizer(newEc, deleteExecutionCursor)
 	return newEc
 }
 
 func (ec *ExecutionCursor) updateValues() error {
+	defer runtime.KeepAlive(ec)
 	status := C.executionCursorMachineHash(ec.c, unsafe.Pointer(&ec.machineHash[0]))
 	if status == 0 {
 		return errors.New("failed to load machine hash")
@@ -130,6 +134,12 @@ func (ec *ExecutionCursor) updateValues() error {
 	}
 	ec.totalSteps = receiveBigInt(result.value)
 
+	result = C.executionCursorL2BlockNumber(ec.c)
+	if result.found == 0 {
+		return errors.New("failed to get L2BlockNumber")
+	}
+	ec.l2BlockNumber = receiveBigInt(result.value)
+
 	return nil
 }
 
@@ -167,4 +177,8 @@ func (ec *ExecutionCursor) TotalLogCount() *big.Int {
 
 func (ec *ExecutionCursor) TotalSteps() *big.Int {
 	return ec.totalSteps
+}
+
+func (ec *ExecutionCursor) L2BlockNumber() *big.Int {
+	return ec.l2BlockNumber
 }

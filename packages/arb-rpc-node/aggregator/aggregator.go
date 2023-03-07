@@ -20,13 +20,13 @@ import (
 	"context"
 	"math/big"
 
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
+
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/batcher"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/snapshot"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/txdb"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
-
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	ethcore "github.com/ethereum/go-ethereum/core"
@@ -35,16 +35,14 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/rpc"
-
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/evm"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/machine"
 )
 
-var logger = log.With().Caller().Str("component", "aggregator").Logger()
+var logger = arblog.Logger.With().Str("component", "aggregator").Logger()
 
 type Server struct {
-	chain   common.Address
 	chainId *big.Int
 	batch   batcher.TransactionBatcher
 	db      *txdb.TxDB
@@ -54,12 +52,10 @@ type Server struct {
 // NewServer returns a new instance of the Server class
 func NewServer(
 	batch batcher.TransactionBatcher,
-	rollupAddress common.Address,
 	chainId *big.Int,
 	db *txdb.TxDB,
 ) *Server {
 	return &Server{
-		chain:   rollupAddress,
 		chainId: chainId,
 		batch:   batch,
 		db:      db,
@@ -69,7 +65,11 @@ func NewServer(
 // SendTransaction takes a request signed transaction l2message from a Client
 // and puts it in a queue to be included in the next transaction batch
 func (m *Server) SendTransaction(ctx context.Context, tx *types.Transaction) error {
-	return m.batch.SendTransaction(ctx, tx)
+	if m.batch != nil {
+		return m.batch.SendTransaction(ctx, tx)
+	}
+
+	return errors.New("no batcher defined, cannot send transaction")
 }
 
 func (m *Server) GetBlockCount() (uint64, error) {
@@ -81,7 +81,9 @@ func (m *Server) GetBlockCount() (uint64, error) {
 }
 
 func (m *Server) BlockNum(block *rpc.BlockNumber) (uint64, error) {
-	if *block == rpc.LatestBlockNumber || *block == rpc.PendingBlockNumber {
+	if block == nil {
+		return 0, errors.New("block number must not be null")
+	} else if *block == rpc.LatestBlockNumber || *block == rpc.PendingBlockNumber {
 		latest, err := m.db.LatestBlock()
 		if err != nil {
 			return 0, err
@@ -102,9 +104,9 @@ func (m *Server) LatestBlockHeader() (*types.Header, error) {
 	return latest.Header, nil
 }
 
-// GetMessageResult returns the value output by the VM in response to the
+// GetRequestResult returns the value output by the VM in response to the
 // l2message with the given hash
-func (m *Server) GetRequestResult(requestId common.Hash) (*evm.TxResult, error) {
+func (m *Server) GetRequestResult(requestId common.Hash) (*evm.TxResult, core.InboxState, *big.Int, error) {
 	return m.db.GetRequest(requestId)
 }
 
@@ -117,10 +119,6 @@ func (m *Server) GetL2ToL1Proof(batchNumber *big.Int, index uint64) (*evm.Merkle
 		return nil, errors.New("batch doesn't exist")
 	}
 	return batch.GenerateProof(index)
-}
-
-func (m *Server) GetChainAddress() ethcommon.Address {
-	return m.chain.ToEthAddress()
 }
 
 func (m *Server) ChainId() *big.Int {
@@ -145,10 +143,10 @@ func (m *Server) GetMachineBlockResults(block *machine.BlockInfo) (*evm.BlockInf
 
 func (m *Server) GetTxInBlockAtIndexResults(res *machine.BlockInfo, index uint64) (*evm.TxResult, error) {
 	avmLog, err := core.GetZeroOrOneLog(m.db.Lookup, new(big.Int).SetUint64(res.InitialLogIndex()+index))
-	if err != nil || avmLog == nil {
+	if err != nil || avmLog.Value == nil {
 		return nil, err
 	}
-	evmRes, err := evm.NewTxResultFromValue(avmLog)
+	evmRes, err := evm.NewTxResultFromValue(avmLog.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -158,38 +156,56 @@ func (m *Server) GetTxInBlockAtIndexResults(res *machine.BlockInfo, index uint64
 	return evmRes, nil
 }
 
-func (m *Server) GetSnapshot(blockHeight uint64) (*snapshot.Snapshot, error) {
-	return m.db.GetSnapshot(blockHeight)
+func (m *Server) GetSnapshot(ctx context.Context, blockHeight uint64) (*snapshot.Snapshot, error) {
+	return m.db.GetSnapshot(ctx, blockHeight)
 }
 
-func (m *Server) LatestSnapshot() (*snapshot.Snapshot, error) {
-	return m.db.LatestSnapshot()
+func (m *Server) LatestSnapshot(ctx context.Context) (*snapshot.Snapshot, error) {
+	return m.db.LatestSnapshot(ctx)
 }
 
-func (m *Server) PendingSnapshot() (*snapshot.Snapshot, error) {
-	pending, err := m.batch.PendingSnapshot()
-	if err != nil {
-		return nil, err
+func (m *Server) PendingSnapshot(ctx context.Context) (*snapshot.Snapshot, error) {
+	if m.batch != nil {
+		pending, err := m.batch.PendingSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if pending == nil {
+			return m.LatestSnapshot(ctx)
+		}
+		return pending, nil
 	}
-	if pending == nil {
-		return m.LatestSnapshot()
-	}
-	return pending, nil
+
+	return m.LatestSnapshot(ctx)
 }
 
 func (m *Server) Aggregator() *common.Address {
-	return m.batch.Aggregator()
+	if m.batch != nil {
+		return m.batch.Aggregator()
+	}
+
+	return &common.Address{}
 }
 
-func (m *Server) PendingTransactionCount(ctx context.Context, account common.Address) *uint64 {
-	return m.batch.PendingTransactionCount(ctx, account)
+func (m *Server) PendingTransactionCount(ctx context.Context, account common.Address) (*uint64, error) {
+	if m.batch != nil {
+		return m.batch.PendingTransactionCount(ctx, account)
+	}
+
+	count := uint64(0)
+	return &count, nil
 }
 
 func (m *Server) ChainDb() ethdb.Database {
 	return nil
 }
 
-func (m *Server) HeaderByNumber(_ context.Context, blockNumber rpc.BlockNumber) (*types.Header, error) {
+func (m *Server) HeaderByNumber(ctx context.Context, blockNumber rpc.BlockNumber) (*types.Header, error) {
+	select {
+	case <-ctx.Done():
+		return nil, errors.New("context cancelled")
+	default:
+	}
 	height, err := m.BlockNum(&blockNumber)
 	if err != nil {
 		return nil, err
@@ -244,6 +260,10 @@ func (m *Server) GetLogs(_ context.Context, blockHash ethcommon.Hash) ([][]*type
 	return logs, nil
 }
 
+func (m *Server) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
+	return nil, nil
+}
+
 func (m *Server) BloomStatus() (uint64, uint64) {
 	return 0, 0
 }
@@ -253,7 +273,7 @@ func (m *Server) ServiceFilter(_ context.Context, _ *bloombits.MatcherSession) {
 }
 
 func (m *Server) SubscribeNewTxsEvent(ch chan<- ethcore.NewTxsEvent) event.Subscription {
-	return m.scope.Track(m.batch.SubscribeNewTxsEvent(ch))
+	return m.scope.Track(m.db.SubscribeNewTxsEvent(ch))
 }
 
 func (m *Server) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Subscription {
@@ -282,4 +302,8 @@ func (m *Server) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription {
 
 func (m *Server) SubscribeBlockProcessingEvent(ch chan<- []*types.Log) event.Subscription {
 	return m.scope.Track(m.db.SubscribeBlockProcessingEvent(ch))
+}
+
+func (m *Server) GetLookup() core.ArbCoreLookup {
+	return m.db.Lookup
 }

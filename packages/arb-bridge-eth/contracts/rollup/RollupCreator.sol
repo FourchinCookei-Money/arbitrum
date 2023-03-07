@@ -37,6 +37,10 @@ import "../bridge/interfaces/IBridge.sol";
 import "./RollupLib.sol";
 import "../libraries/ICloneable.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract RollupCreator is Ownable {
     event RollupCreated(address indexed rollupAddress, address inboxAddress, address adminProxy);
     event TemplatesUpdated();
@@ -71,10 +75,10 @@ contract RollupCreator is Ownable {
         bytes32 _machineHash,
         uint256 _confirmPeriodBlocks,
         uint256 _extraChallengeTimeBlocks,
-        uint256 _arbGasSpeedLimitPerBlock,
+        uint256 _avmGasSpeedLimitPerBlock,
         uint256 _baseStake,
         address _stakeToken,
-        address _owner,
+        address _rollupOwner,
         address _sequencer,
         uint256 _sequencerDelayBlocks,
         uint256 _sequencerDelaySeconds,
@@ -86,10 +90,10 @@ contract RollupCreator is Ownable {
                     _machineHash,
                     _confirmPeriodBlocks,
                     _extraChallengeTimeBlocks,
-                    _arbGasSpeedLimitPerBlock,
+                    _avmGasSpeedLimitPerBlock,
                     _baseStake,
                     _stakeToken,
-                    _owner,
+                    _rollupOwner,
                     _sequencer,
                     _sequencerDelayBlocks,
                     _sequencerDelaySeconds,
@@ -134,7 +138,7 @@ contract RollupCreator is Ownable {
             [
                 config.confirmPeriodBlocks,
                 config.extraChallengeTimeBlocks,
-                config.arbGasSpeedLimitPerBlock,
+                config.avmGasSpeedLimitPerBlock,
                 config.baseStake
             ],
             config.stakeToken,

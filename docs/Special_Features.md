@@ -8,7 +8,9 @@ sidebar_label: Special Features
 
 Every Arbitrum chain includes a native, pre-compiled Address Table Registry contract. This contract allows users to register an address, mapping it to some index, which can thenceforth be used to retrieve the address, thereby saving bytes of calldata.
 
-The interface is here:
+See [address-table](https://github.com/OffchainLabs/arbitrum-tutorials/tree/master/packages/address-table) for a demo of client-side interactions with the address table.
+
+The address table interface is here:
 
 ```sol
 
@@ -69,11 +71,11 @@ For example usage, see our [Arbiswap Demo](https://github.com/OffchainLabs/Arbis
 
 ### Parameter Byte Serialization
 
-Generally speaking, L1 calldata will the primary contributor to gas cost for Arbitrum transactions. Thus, when you're looking to gas-optimize your contract for Arbitrum, if you can minimize the amount of calldata it uses, you probably should!
+Generally speaking, L1 calldata will be the primary contributor to gas cost for Arbitrum transactions. Thus, when you're looking to gas-optimize your contract for Arbitrum, if you can minimize the amount of calldata it uses, you probably should!
 
 One way of doing so broadly applicable to most contracts is to replace a method's parameters with a serialized byte array and have the contract deserialize the data.
 
-[arb-ts](https://arb-ts-docs.netlify.app/) offers convenience methods for this client side serialization (as well as interacting with the Address table).
+[Arbitrum SDK](https://github.com/OffchainLabs/arbitrum-sdk/tree/master/integration_test) offers convenience methods for this client side serialization (as well as interacting with the Address table).
 
 For example usage, see our Arbiswap Demo:
 

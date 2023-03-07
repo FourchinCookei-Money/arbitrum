@@ -24,6 +24,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "./Validator.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract ValidatorWalletCreator is Ownable {
     event WalletCreated(
         address indexed walletAddress,
@@ -45,8 +49,9 @@ contract ValidatorWalletCreator is Ownable {
 
     function createWallet() external returns (address) {
         ProxyAdmin admin = new ProxyAdmin();
-        address proxy =
-            address(new TransparentUpgradeableProxy(address(template), address(admin), ""));
+        address proxy = address(
+            new TransparentUpgradeableProxy(address(template), address(admin), "")
+        );
         admin.transferOwnership(msg.sender);
         Validator(proxy).initialize();
         Validator(proxy).transferOwnership(msg.sender);

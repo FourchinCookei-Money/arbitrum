@@ -1,4 +1,4 @@
-arb-validator.Dockerfile
+**/arb-node.Dockerfile
 **/arb-avm-cpp/cmachine/flags.go
 **/arb-avm-cpp/cmachine/flags.go.in2
 **/arb-avm-cpp/rocksdb
@@ -6,6 +6,9 @@ arb-validator.Dockerfile
 
 **/Dockerfile
 **/.dockerignore
+
+# Go-ethereum test data (large and unnecessary)
+**/go-ethereum/tests/testdata/
 
 # Custom and then Node, Go, Cpp, Python
 **/.DS_Store

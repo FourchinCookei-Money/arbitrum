@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-pragma solidity >=0.4.21 <0.7.0;
+pragma solidity >=0.4.21 <0.9.0;
 
 contract ConstructorCallback {
     event TestEvent(uint256 dataLength);
@@ -40,10 +40,9 @@ contract ConstructorCallback2 {
     }
 
     function test2() external payable {
-        (bool success, bytes memory returnData) =
-            address(msg.sender).call(
-                abi.encodeWithSelector(ConstructorCallback.test.selector, msg.sender)
-            );
+        (bool success, bytes memory returnData) = address(msg.sender).call(
+            abi.encodeWithSelector(ConstructorCallback.test.selector, msg.sender)
+        );
         emit TestEvent3(success, returnData);
     }
 }

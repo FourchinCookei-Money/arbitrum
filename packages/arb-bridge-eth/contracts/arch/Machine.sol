@@ -22,6 +22,10 @@ import "./Marshaling.sol";
 
 import "../libraries/DebugPrint.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 library Machine {
     using Hashing for Value.Data;
 
@@ -48,7 +52,7 @@ library Machine {
         Value.Data auxStack;
         Value.Data registerVal;
         Value.Data staticVal;
-        uint256 arbGasRemaining;
+        uint256 avmGasRemaining;
         bytes32 errHandlerHash;
         uint256 status;
     }
@@ -68,7 +72,7 @@ library Machine {
                     ", \n",
                     DebugPrint.bytes32string(machine.staticVal.hash()),
                     ", \n",
-                    DebugPrint.uint2str(machine.arbGasRemaining),
+                    DebugPrint.uint2str(machine.avmGasRemaining),
                     ", \n",
                     DebugPrint.bytes32string(machine.errHandlerHash),
                     ")\n"
@@ -92,10 +96,6 @@ library Machine {
         machine.auxStack = addStackVal(machine.auxStack, val);
     }
 
-    function addDataStackInt(Data memory machine, uint256 val) internal pure {
-        machine.dataStack = addStackVal(machine.dataStack, Value.newInt(val));
-    }
-
     function hash(Data memory machine) internal pure returns (bytes32) {
         if (machine.status == MACHINE_HALT) {
             return bytes32(uint256(0));
@@ -110,7 +110,7 @@ library Machine {
                         machine.auxStack.hash(),
                         machine.registerVal.hash(),
                         machine.staticVal.hash(),
-                        machine.arbGasRemaining,
+                        machine.avmGasRemaining,
                         machine.errHandlerHash
                     )
                 );
@@ -125,7 +125,7 @@ library Machine {
                 machine.auxStack,
                 machine.registerVal,
                 machine.staticVal,
-                machine.arbGasRemaining,
+                machine.avmGasRemaining,
                 machine.errHandlerHash,
                 machine.status
             );
@@ -149,7 +149,7 @@ library Machine {
         (offset, m.auxStack) = Marshaling.deserializeHashPreImage(data, offset);
         (offset, m.registerVal) = Marshaling.deserialize(data, offset);
         (offset, m.staticVal) = Marshaling.deserialize(data, offset);
-        (offset, m.arbGasRemaining) = Marshaling.deserializeInt(data, offset);
+        (offset, m.avmGasRemaining) = Marshaling.deserializeInt(data, offset);
         (offset, errHandler) = Marshaling.deserializeInt(data, offset);
 
         m.instructionStackHash = bytes32(instructionStack);

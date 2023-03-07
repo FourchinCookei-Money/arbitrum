@@ -34,13 +34,11 @@ The Arbitrum protocol itself technically has no native notion of any token stand
 
 ### Design Rationale
 
-_Our design and thinking has been influenced by many in the Ethereum community, including [this proposal](https://ethereum-magicians.org/t/outlining-a-standard-interface-for-cross-domain-erc20-transfers/6151) from Maurelian & Ben Jones at Optimism, work with David Mihal, and feedback from many projects building on Arbitrum, too numerous to mention!_
+In our token bridge design, we use the term "Gateway" as per [this proposal](https://ethereum-magicians.org/t/outlining-a-standard-interface-for-cross-domain-erc20-transfers/6151); i.e., one of a pair of contracts on two different domains (i.e., Ethereum and an Arbitrum chain), used to facilitate cross-domain asset transfers.
 
-We use the term "Gateway" as per the proposal linked above; i.e., one of a pair of contracts on two different domains (i.e., Ethereum and an Arbitrum chain), used to facilitate cross-domain asset transfers.
+Some core goals that motivated the design of our bridging system:
 
-Three core goals motivate the design of our bridging system:
-
-#### 1. Custom Gateway functionality
+#### Custom Gateway functionality
 
 For many ERC20 tokens, "standard" bridging functionality is sufficient, which entails the following: a token contract on Ethereum is associated with a "paired" token contract on Arbitrum. Depositing a token entails escrowing some amount of the token in an L1 bridge contract, and minting the same amount at the paired token contract on L2. On L2, the paired contract behaves much like a normal ERC20 token contract.
 
@@ -53,13 +51,9 @@ Many tokens, however, require custom Gateway systems, the possibilities of which
 
 Thus, our bridge architecture must allow not just the standard deposit/withdraw functionality, but for new, custom Gateways to be dynamically added over time.
 
-#### 2. Canonical L2 Representation Per L1 Token Contract
+#### Canonical L2 Representation Per L1 Token Contract
 
 ...having multiple custom Gateways is well and good, but we also want to avoid a situation in which a single L1 token that uses our bridging system can be represented at multiple addresses/contracts on the L2 (as this adds significant friction and confusion for users and developers). Thus, we need a way to track which L1 token uses which gateway, and in turn, to have a canonical address oracle that maps the tokens addresses across the Ethereum and Arbitrum domains.
-
-#### 3. Domain Agnostic
-
-[This post](<(https://ethereum-magicians.org/t/outlining-a-standard-interface-for-cross-domain-erc20-transfers/6151)>) convinced us thinking about this early on is important; while here we are focused on bridging assets between Ethereum L1 and a single Arbitrum chain, we expect that overtime, Gateways will be developed to transfer assets between any combination of Rollups, Shards, and other L1s. Thus, we follow domain-neutral semantics like "outBoundTransfer" over things like "deposit" and "withdraw", and ensure that common interfaces are sufficiently extensible to support custom (i.e., domain-specific) functionality.
 
 ### Canonical Token Bridge Implementation
 
@@ -79,9 +73,15 @@ Similarly, Arbitrum to Ethereum transfers are initiated via the `L2GatewayRouter
 
 For any given gateway pairing, we require that calls be initiated through the `GatewayRouter`, and that the gateways conform to the `TokenGateway` interfaces; the `TokenGateway` interfaces should be flexible and extensible enough to support any bridging functionality a particular token may require.
 
-#### Standard Arb-ERC20 Bridging
+### Default Standard Bridging
 
-To help illustrate what this looks like in practice, let's go through the steps of what depositing and withdrawing `SomeERC20Token` via our Standard ERC20 gateway looks like. Here, we're assuming that `SomeERC20Token` has already been registered in the `L1GatewayRouter` to use the Standard ERC20 Gateway.
+By default, any ERC20 token on L1 that isn't registered to a Gateway can be permissionlessly bridged to the Standard ERC20 Gateway.
+
+You can use the bridge UI or [this script](https://github.com/OffchainLabs/arbitrum-sdk/blob/master/scripts/deployStandard.ts) to a bridge a token to L2.
+
+#### Example: Standard Arb-ERC20 Deposit/Withdraw
+
+To help illustrate what this all looks like in practice, let's go through the steps of what depositing and withdrawing `SomeERC20Token` via our Standard ERC20 gateway looks like. Here, we're assuming that `SomeERC20Token` has already been registered in the `L1GatewayRouter` to use the Standard ERC20 Gateway.
 
 #### Deposits
 
@@ -105,7 +105,7 @@ Note that arbSomeERC20Token is an instance of StandardArbERC20, which includes `
 
 ### The Arbitrum Generic Custom Gateway
 
-Just because a token has requirements beyond what are offered via the StandardERC20 gateway, that doesn't necessarily mean that a unique Gateway needs to be taylor-made for the token in question. Our Generic-Custom Gateway is designed to be flexible enough to be suitable for most (but not necessarily all) custom fungible token needs. As a general rule:
+Just because a token has requirements beyond what are offered via the StandardERC20 gateway, that doesn't necessarily mean that a unique Gateway needs to be tailor-made for the token in question. Our Generic-Custom Gateway is designed to be flexible enough to be suitable for most (but not necessarily all) custom fungible token needs. As a general rule:
 
 **If your custom token has the ability to increase its supply (i.e, mint) directly on the L2, and you want the L2-minted tokens be withdrawable back to L1 and recognized by the L1 contract, it will probably require its own special gateway. Otherwise, the Generic-Custom Gateway is likely the right solution for you!**
 
@@ -119,25 +119,23 @@ Some examples of token features suitable for the Generic-Custom Gateway:
 
 Follow the following steps to get your token set up to use the Generic Custom Gateway
 
+**0. Have an L1 token**
+
+- Your token on L1 should conform to the [ICustomToken](./sol_contract_docs/md_docs/arb-bridge-peripherals/tokenbridge/ethereum/ICustomToken.md) interface; (see [TestCustomTokenL1](https://github.com/OffchainLabs/arbitrum/blob/master/packages/arb-bridge-peripherals/contracts/tokenbridge/test/TestCustomTokenL1.sol) for an example implementation). Crucially, it must have an `isArbitrumEnabled` method in its interface.
+
 **1. Deploy your token on Arbitrum**
 
 - Your token should conform to the minimum [IArbToken](./sol_contract_docs/md_docs/arb-bridge-peripherals/tokenbridge/arbitrum/IArbToken.md)
   interface; i.e., it should have `bridgeMint` and `bridgeBurn` methods only callable by the L2CustomGateway contract, and the address of its corresponding Ethereum token accessible via `l1Address`. For an example implementation, see [TestArbCustomToken](https://github.com/OffchainLabs/arbitrum/blob/master/packages/arb-bridge-peripherals/contracts/tokenbridge/test/TestArbCustomToken.sol).
 
 **2. Register Your Token on L1 to Your Token on L2 via the L1CustomGateway Contract**
-Have your L1 token's contract make an external call to `L1CustomGateway.registerTokenToL2` (see, i.e., [TestCustomTokenL1](https://github.com/OffchainLabs/arbitrum/blob/master/packages/arb-bridge-peripherals/contracts/tokenbridge/test/TestCustomTokenL1.sol)).
+Have your L1 token's contract make an external call to `L1CustomGateway.registerTokenToL2`. This registration can alternatively be performed as an admin registration.
 
 **3. Register Your Token on L1 To the L1Gateway Router**
-Have your L1 token's contract make an external to `L1GatewayRouter.setGateway`.
+After your token's registration to the Custom Gateway is complete, have your L1 token's contract make an external call to `L1GatewayRouter.setGateway`; this registration can also alternatively be performed as an admin registration.
 
-For steps 2 and 3: if you'd like perform a Generic Custom Gateway registration for a token that is already deployed on L1 (and thus doesn't have affordances to make external calls to the L1GatewayRouter and the L1CustomGateway) you have 3 options:
-
-- Create an ERC20 wrapper for your token on L1 that has the affordances to call the registration method, and bridge to Arbitrum via this wrapper
-- Deploy to Arbitrum via the standard gateway, and handle custom behavior by creating an ERC20 wrapper for the L2 contract
-- Deploy your L2 token and have us perform an admin registration (note: this admin ability is only a temporary measure to cleanly support previously-deployed tokens)
-
-| :point_up: The admin privilege over the router and generic custom gateway are temporary and users should use at their own discretion |
-| ------------------------------------------------------------------------------------------------------------------------------------ |
+| If you have questions about your custom token needs, feel free to [reach out](https://discord.gg/ZpZuw7p). |
+| ---------------------------------------------------------------------------------------------------------- |
 
 #### Other Flavors of Gateways
 
@@ -146,3 +144,11 @@ Note that in the system described above, one pair of Gateway contracts handles t
 Take our wrapped Ether implementation, for example: here, a single WETH contract on L1 is connected to a single WETH contract on L2. When transferring WETH from one domain to another, the L1/L2 Gateway architecture is used to unwrap the WETH on domain A, transfer the now-unwrapped Ether, and then re-wrap it on domain B. This ensures that WETH can behave on Arbitrum the way users are used to it behaving on Ethereum, while ensuring that all WETH tokens are always fully collateralized on the layer in which they reside.
 
 No matter the complexity of a particular token's bridging needs, a gateway can in principle be created it to accommodate it within our canonical bridging system.
+
+### Demos
+
+See [token-deposit](https://github.com/OffchainLabs/arbitrum-tutorials/tree/master/packages/token-deposit) and [token-withdraw](https://github.com/OffchainLabs/arbitrum-tutorials/tree/master/packages/token-withdraw) for demos of interacting with the bridge architecture via the [Arbitrum SDK](https://github.com/OffchainLabs/arbitrum-sdk).
+
+#### A Word of Caution on Bridges (aka, "I've Got a Bridge To Sell You")
+
+Cross chain bridging is an exciting design space; alternative bridge designs can potentially offer faster withdrawals, interoperability with other chains, different trust assumptions with their own potentially valuable UX tradeoffs, etc. They can also potentially be completely insecure and/or outright scams. Users should treat other, non-canonical bridge applications the same way they treat any application running on Arbitrum, and exercise caution and due diligence before entrusting them with their value.

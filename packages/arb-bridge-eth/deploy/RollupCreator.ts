@@ -2,7 +2,7 @@ import { HardhatRuntimeEnvironment } from 'hardhat/types'
 import { DeployFunction } from 'hardhat-deploy/types'
 
 const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
-  const { deployments, getNamedAccounts, ethers } = hre
+  const { deployments, ethers } = hre
   const { deploy } = deployments
   const [deployer] = await ethers.getSigners()
 
@@ -31,7 +31,7 @@ const func: DeployFunction = async (hre: HardhatRuntimeEnvironment) => {
 }
 
 module.exports = func
-module.exports.tags = ['RollupCreator', 'live']
+module.exports.tags = ['RollupCreator', 'live', 'test']
 module.exports.dependencies = [
   'Rollup',
   'ChallengeFactory',

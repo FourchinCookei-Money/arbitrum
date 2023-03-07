@@ -26,13 +26,13 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/hashing"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/inbox"
@@ -112,7 +112,7 @@ func (r *RollupWatcher) LookupCreation(ctx context.Context) (*ethbridgecontracts
 	var query = ethereum.FilterQuery{
 		BlockHash: nil,
 		FromBlock: big.NewInt(r.fromBlock),
-		ToBlock:   nil,
+		ToBlock:   big.NewInt(r.fromBlock),
 		Addresses: []ethcommon.Address{r.address},
 		Topics:    [][]ethcommon.Hash{{rollupCreatedID}},
 	}
@@ -243,6 +243,19 @@ func (r *RollupWatcher) LookupChallengedNode(ctx context.Context, address common
 	return challenge.ChallengedNode, nil
 }
 
+func (r *RollupWatcher) GetNodeStakerCount(ctx context.Context, nodeNum *big.Int) (*big.Int, error) {
+	callOpts := r.getCallOpts(ctx)
+	nodeAddr, err := r.con.GetNode(callOpts, nodeNum)
+	if err != nil {
+		return nil, err
+	}
+	nodeContract, err := ethbridgecontracts.NewINode(nodeAddr, r.client)
+	if err != nil {
+		return nil, err
+	}
+	return nodeContract.StakerCount(callOpts)
+}
+
 func (r *RollupWatcher) StakerInfo(ctx context.Context, staker common.Address) (*StakerInfo, error) {
 	info, err := r.con.StakerMap(r.getCallOpts(ctx), staker.ToEthAddress())
 	if err != nil {
@@ -262,6 +275,10 @@ func (r *RollupWatcher) StakerInfo(ctx context.Context, staker common.Address) (
 		stakerInfo.CurrentChallenge = &chal
 	}
 	return stakerInfo, nil
+}
+
+func (r *RollupWatcher) WithdrawableFunds(ctx context.Context, staker common.Address) (*big.Int, error) {
+	return r.con.WithdrawableFunds(r.getCallOpts(ctx), staker.ToEthAddress())
 }
 
 func (r *RollupWatcher) MinimumAssertionPeriod(ctx context.Context) (*big.Int, error) {
@@ -325,4 +342,13 @@ func (r *RollupWatcher) GetNode(ctx context.Context, node core.NodeID) (*NodeWat
 		return nil, errors.WithStack(err)
 	}
 	return NewNodeWatcher(nodeAddress, r.client, r.baseCallOpts)
+}
+
+func (r *RollupWatcher) IsShuttingDownForNitro(ctx context.Context) (bool, error) {
+	shuttingDownForNitro, err := r.con.ShutdownForNitroMode(r.getCallOpts(ctx))
+	if err != nil {
+		logger.Warn().Err(err).Msg("assuming not shutting down for nitro as we failed to check")
+		return false, nil
+	}
+	return shuttingDownForNitro, nil
 }

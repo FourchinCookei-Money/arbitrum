@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020, Offchain Labs, Inc.
+ * Copyright 2019-2021, Offchain Labs, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package speedtest
 
 import (
+	"context"
 	"io/ioutil"
 	"math/big"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-avm-cpp/cmachine"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 )
 
 func getInsnMultiplier(b *testing.B, filePath string) uint64 {
@@ -47,8 +49,10 @@ func getInsnMultiplier(b *testing.B, filePath string) uint64 {
 }
 
 func runExecutableFile(b *testing.B, filePath string) {
+	ctx := context.Background()
 	insnMultiplier := getInsnMultiplier(b, filePath)
-	ckp, err := cmachine.NewArbStorage(b.TempDir())
+	coreConfig := configuration.DefaultCoreSettingsMaxExecution()
+	ckp, err := cmachine.NewArbStorage(b.TempDir(), coreConfig)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -56,7 +60,7 @@ func runExecutableFile(b *testing.B, filePath string) {
 		b.Fatal(err)
 	}
 	core := ckp.GetArbCore()
-	cursor, err := core.GetExecutionCursor(big.NewInt(0))
+	cursor, err := core.GetExecutionCursor(big.NewInt(0), true)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -68,7 +72,7 @@ func runExecutableFile(b *testing.B, filePath string) {
 	b.ResetTimer()
 
 	// Last parameter returned is number of steps executed
-	_, _, _, err = mach.ExecuteAssertion(uint64(b.N)*insnMultiplier, true, nil)
+	_, _, _, err = mach.ExecuteAssertion(ctx, uint64(b.N)*insnMultiplier, true, nil, false)
 	if err != nil {
 		b.Fatal(err)
 	}

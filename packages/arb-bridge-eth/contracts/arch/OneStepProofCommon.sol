@@ -24,6 +24,10 @@ import "./Machine.sol";
 import "../bridge/interfaces/IBridge.sol";
 import "../bridge/interfaces/ISequencerInbox.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 abstract contract OneStepProofCommon is IOneStepProof {
     using Machine for Machine.Data;
     using Hashing for Value.Data;
@@ -40,7 +44,6 @@ abstract contract OneStepProofCommon is IOneStepProof {
     string internal constant STACK_MANY = "STACK_MANY";
     string internal constant AUX_MANY = "AUX_MANY";
     string internal constant INBOX_VAL = "INBOX_VAL";
-
     // Stop and arithmetic ops
     uint8 internal constant OP_ADD = 0x01;
     uint8 internal constant OP_MUL = 0x02;
@@ -164,8 +167,13 @@ abstract contract OneStepProofCommon is IOneStepProof {
             bytes32[4] memory fields
         )
     {
-        AssertionContext memory context =
-            initializeExecutionContext(initialMessagesRead, accs, proof, bproof, bridges);
+        AssertionContext memory context = initializeExecutionContext(
+            initialMessagesRead,
+            accs,
+            proof,
+            bproof,
+            bridges
+        );
 
         executeOp(context);
 
@@ -179,8 +187,13 @@ abstract contract OneStepProofCommon is IOneStepProof {
         bytes calldata proof,
         bytes calldata bproof
     ) external view override returns (string memory startMachine, string memory afterMachine) {
-        AssertionContext memory context =
-            initializeExecutionContext(initialMessagesRead, accs, proof, bproof, bridges);
+        AssertionContext memory context = initializeExecutionContext(
+            initialMessagesRead,
+            accs,
+            proof,
+            bproof,
+            bridges
+        );
 
         executeOp(context);
         startMachine = Machine.toString(context.startMachine);
@@ -260,14 +273,14 @@ abstract contract OneStepProofCommon is IOneStepProof {
         pure
         returns (bool)
     {
-        if (context.afterMachine.arbGasRemaining < amount) {
+        if (context.afterMachine.avmGasRemaining < amount) {
             // ERROR + GAS_SET
             context.gas += ERROR_GAS_COST;
-            context.afterMachine.arbGasRemaining = MAX_UINT256;
+            context.afterMachine.avmGasRemaining = MAX_UINT256;
             return true;
         } else {
             context.gas += amount;
-            context.afterMachine.arbGasRemaining -= amount;
+            context.afterMachine.avmGasRemaining -= amount;
             return false;
         }
     }

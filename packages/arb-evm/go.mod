@@ -3,10 +3,11 @@ module github.com/offchainlabs/arbitrum/packages/arb-evm
 go 1.13
 
 require (
-	github.com/ethereum/go-ethereum v1.10.4
+	github.com/ethereum/go-ethereum v1.10.18
 	github.com/offchainlabs/arbitrum/packages/arb-util v0.8.0
 	github.com/pkg/errors v0.9.1
-	github.com/rs/zerolog v1.23.0
+	github.com/rjeczalik/notify v0.9.1 // indirect
+	github.com/rs/zerolog v1.26.1
 )
 
 replace github.com/offchainlabs/arbitrum/packages/arb-util => ../arb-util
@@ -16,3 +17,5 @@ replace github.com/offchainlabs/arbitrum/packages/arb-node-core => ../arb-node-c
 replace github.com/offchainlabs/arbitrum/packages/arb-evm => ../arb-evm
 
 replace github.com/offchainlabs/arbitrum/packages/arb-avm-cpp => ../arb-avm-cpp
+
+replace github.com/ethereum/go-ethereum => ../go-ethereum

@@ -20,8 +20,14 @@ pragma solidity ^0.6.11;
 
 import "./INode.sol";
 import "../libraries/Cloneable.sol";
+import "./Rollup.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import { NitroReadyMagicNums } from "../bridge/NitroMigratorUtil.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract Node is Cloneable, INode {
     using SafeMath for uint256;
 
@@ -37,8 +43,7 @@ contract Node is Cloneable, INode {
     /// @notice Index of the node previous to this one
     uint256 public override prev;
 
-    /// @notice Deadline at which this node can be confirmed
-    uint256 public override deadlineBlock;
+    uint256 private deadlineBlock_;
 
     /// @notice Deadline at which a child of this node can be confirmed
     uint256 public override noChildConfirmedBeforeBlock;
@@ -58,9 +63,16 @@ contract Node is Cloneable, INode {
     /// @notice The number of the latest child of this node to be created
     uint256 public override latestChildNumber;
 
-    modifier onlyRollup {
+    modifier onlyRollup() {
         require(msg.sender == rollup, "ROLLUP_ONLY");
         _;
+    }
+
+    /// @notice Deadline block at which this node can be confirmed
+    /// @dev nodes can be confirmed instantly after shutdownForNitroBlock
+    function deadlineBlock() public view override returns (uint256) {
+        uint256 shutdownForNitroBlock = Rollup(payable(rollup)).shutdownForNitroBlock();
+        return block.number >= shutdownForNitroBlock ? shutdownForNitroBlock : deadlineBlock_;
     }
 
     /**
@@ -80,14 +92,14 @@ contract Node is Cloneable, INode {
         uint256 _prev,
         uint256 _deadlineBlock
     ) external override {
-        require(rollup == address(0), "ALREADY_INIT");
         require(_rollup != address(0), "ROLLUP_ADDR");
+        require(rollup == address(0), "ALREADY_INIT");
         rollup = _rollup;
         stateHash = _stateHash;
         challengeHash = _challengeHash;
         confirmData = _confirmData;
         prev = _prev;
-        deadlineBlock = _deadlineBlock;
+        deadlineBlock_ = _deadlineBlock;
         noChildConfirmedBeforeBlock = _deadlineBlock;
     }
 
@@ -127,11 +139,6 @@ contract Node is Cloneable, INode {
         latestChildNumber = number;
     }
 
-    function resetChildren() external override onlyRollup {
-        firstChildBlock = 0;
-        latestChildNumber = 0;
-    }
-
     function newChildConfirmDeadline(uint256 deadline) external override onlyRollup {
         noChildConfirmedBeforeBlock = deadline;
     }
@@ -140,13 +147,21 @@ contract Node is Cloneable, INode {
      * @notice Check whether the current block number has met or passed the node's deadline
      */
     function requirePastDeadline() external view override {
-        require(block.number >= deadlineBlock, "BEFORE_DEADLINE");
+        require(block.number >= deadlineBlock(), "BEFORE_DEADLINE");
+    }
+
+    function isNitroReady() external pure override returns (uint256) {
+        return NitroReadyMagicNums.NODE_BEACON;
     }
 
     /**
      * @notice Check whether the current block number has met or passed deadline for children of this node to be confirmed
      */
     function requirePastChildConfirmDeadline() external view override {
-        require(block.number >= noChildConfirmedBeforeBlock, "CHILD_TOO_RECENT");
+        require(
+            Rollup(payable(rollup)).shutdownForNitroMode() ||
+                block.number >= noChildConfirmedBeforeBlock,
+            "CHILD_TOO_RECENT"
+        );
     }
 }

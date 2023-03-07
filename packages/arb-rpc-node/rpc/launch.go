@@ -21,22 +21,22 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/offchainlabs/arbitrum/packages/arb-util/broadcaster"
-
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/pkg/errors"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridge"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/monitor"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/batcher"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/txdb"
 	utils2 "github.com/offchainlabs/arbitrum/packages/arb-rpc-node/utils"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/broadcaster"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/transactauth"
 )
 
 type BatcherMode interface {
@@ -67,10 +67,15 @@ type SequencerBatcherMode struct {
 	Auth        *bind.TransactOpts
 	Core        core.ArbCore
 	InboxReader *monitor.InboxReader
-	Config      configuration.Sequencer
 }
 
 func (b SequencerBatcherMode) isBatcherMode() {}
+
+type ErrorBatcherMode struct {
+	Error error
+}
+
+func (b ErrorBatcherMode) isBatcherMode() {}
 
 func SetupBatcher(
 	ctx context.Context,
@@ -81,69 +86,97 @@ func SetupBatcher(
 	maxBatchTime time.Duration,
 	batcherMode BatcherMode,
 	dataSigner func([]byte) ([]byte, error),
-	broadcasterSettings configuration.FeedOutput,
-) (batcher.TransactionBatcher, error) {
+	config *configuration.Config,
+	walletConfig *configuration.Wallet,
+) (batcher.TransactionBatcher, chan error, error) {
 	switch batcherMode := batcherMode.(type) {
 	case ForwarderBatcherMode:
-		return batcher.NewForwarder(ctx, batcherMode.Config)
+		newBatcher, err := batcher.NewForwarder(ctx, batcherMode.Config)
+		if err != nil {
+			return nil, nil, err
+		}
+		return newBatcher, nil, nil
+	case ErrorBatcherMode:
+		return &ErrorBatcher{err: batcherMode.Error}, nil, nil
 	case StatelessBatcherMode:
-		auth, err := ethbridge.NewTransactAuth(ctx, client, batcherMode.Auth)
+		var auth transactauth.TransactAuth
+		var err error
+		if len(walletConfig.Fireblocks.SSLKey) > 0 {
+			auth, _, err = transactauth.NewFireblocksTransactAuth(ctx, client, batcherMode.Auth, walletConfig)
+		} else {
+			auth, err = transactauth.NewTransactAuth(ctx, client, batcherMode.Auth)
+		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		inbox, err := ethbridge.NewStandardInbox(batcherMode.InboxAddress.ToEthAddress(), client, auth)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return batcher.NewStatelessBatcher(ctx, db, l2ChainId, client, inbox, maxBatchTime), nil
+		newBatcher, err := batcher.NewStatelessBatcher(ctx, db, l2ChainId, auth, inbox, maxBatchTime), nil
+		if err != nil {
+			return nil, nil, err
+		}
+		return newBatcher, nil, nil
 	case StatefulBatcherMode:
-		auth, err := ethbridge.NewTransactAuth(ctx, client, batcherMode.Auth)
+		var auth transactauth.TransactAuth
+		var err error
+		if len(walletConfig.Fireblocks.SSLKey) > 0 {
+			auth, _, err = transactauth.NewFireblocksTransactAuth(ctx, client, batcherMode.Auth, walletConfig)
+		} else {
+			auth, err = transactauth.NewTransactAuth(ctx, client, batcherMode.Auth)
+		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		inbox, err := ethbridge.NewStandardInbox(batcherMode.InboxAddress.ToEthAddress(), client, auth)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return batcher.NewStatefulBatcher(ctx, db, l2ChainId, client, inbox, maxBatchTime)
+		newBatcher, err := batcher.NewStatefulBatcher(ctx, db, l2ChainId, auth, inbox, maxBatchTime)
+		if err != nil {
+			return nil, nil, err
+		}
+		return newBatcher, nil, nil
 	case SequencerBatcherMode:
 		rollup, err := ethbridgecontracts.NewRollupUserFacet(rollupAddress.ToEthAddress(), client)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		callOpts := &bind.CallOpts{Context: ctx}
 		seqInboxAddr, err := rollup.SequencerBridge(callOpts)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		seqInbox, err := ethbridgecontracts.NewSequencerInbox(seqInboxAddr, client)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		feedBroadcaster := broadcaster.NewBroadcaster(broadcasterSettings)
+		feedBroadcaster := broadcaster.NewBroadcaster(&config.Feed.Output, config.Node.ChainID)
 		seqBatcher, err := batcher.NewSequencerBatcher(
 			ctx,
 			batcherMode.Core,
 			l2ChainId,
 			batcherMode.InboxReader,
 			client,
-			batcherMode.Config,
 			seqInbox,
+			common.NewAddressFromEth(seqInboxAddr),
 			batcherMode.Auth,
 			dataSigner,
 			feedBroadcaster,
-		)
+			config,
+			walletConfig)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		err = feedBroadcaster.Start(ctx)
+		broadcasterErrChan, err := feedBroadcaster.Start(ctx)
 		if err != nil {
-			return nil, errors.Wrap(err, "error starting feed broadcaster")
+			return nil, nil, errors.Wrap(err, "error starting feed broadcaster")
 		}
-		return seqBatcher, nil
+		return seqBatcher, broadcasterErrChan, nil
 	default:
-		return nil, errors.New("unexpected batcher type")
+		return nil, nil, errors.New("unexpected batcher type")
 	}
 }
 

@@ -12,19 +12,20 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-avm-cpp/gotest"
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/message"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridge"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgetestcontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/monitor"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/test"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgetestcontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/hashing"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/inbox"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/protocol"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/test"
 )
 
 func TestInboxProof(t *testing.T) {
+	ctx := context.Background()
 	testDir, err := gotest.OpCodeTestDir()
 	test.FailIfError(t, err)
 	mexe := filepath.Join(testDir, "inbox.mexe")
@@ -42,20 +43,19 @@ func TestInboxProof(t *testing.T) {
 	test.FailIfError(t, err)
 	sequencerAddr, _, sequencerCon, err := ethbridgecontracts.DeploySequencerInbox(auth, client)
 	test.FailIfError(t, err)
-	rollupAddr, _, rollup, err := ethbridgetestcontracts.DeployRollupMock(auth, client)
-	test.FailIfError(t, err)
 	client.Commit()
 
 	sequencerInboxWatcher, err := ethbridge.NewSequencerInboxWatcher(sequencerAddr, client)
 	test.FailIfError(t, err)
 
-	_, err = rollup.SetMock(auth, maxDelayBlocks, maxDelaySeconds)
-	test.FailIfError(t, err)
 	_, err = delayedBridge.Initialize(auth)
 	test.FailIfError(t, err)
-	_, err = sequencerCon.Initialize(auth, delayedBridgeAddr, sequencer, rollupAddr)
+	_, err = sequencerCon.Initialize(auth, delayedBridgeAddr, sequencer, auth.From)
 	test.FailIfError(t, err)
 	client.Commit()
+
+	_, err = sequencerCon.SetMaxDelay(auth, maxDelayBlocks, maxDelaySeconds)
+	test.FailIfError(t, err)
 
 	_, err = delayedBridge.SetInbox(auth, auth.From, true)
 	test.FailIfError(t, err)
@@ -91,7 +91,7 @@ func TestInboxProof(t *testing.T) {
 		return delayedAcc, delayed
 	}
 
-	delayedAcc1, delayed1 := addDelayed(common.Hash{}, initMsg, common.NewAddressFromEth(rollupAddr), 0)
+	delayedAcc1, delayed1 := addDelayed(common.Hash{}, initMsg, common.NewAddressFromEth(auth.From), 0)
 	delayedAcc2, delayed2 := addDelayed(delayedAcc1, message.NewSafeL2Message(message.NewRandomTransaction()), common.RandAddress(), 1)
 
 	delayedItem1 := inbox.NewDelayedItem(big.NewInt(0), big.NewInt(1), common.Hash{}, big.NewInt(0), delayedAcc1)
@@ -153,10 +153,19 @@ func TestInboxProof(t *testing.T) {
 	test.FailIfError(t, err)
 	client.Commit()
 
-	err = core.DeliverMessagesAndWait(arbCore.Core, big.NewInt(0), common.Hash{}, []inbox.SequencerBatchItem{delayedItem1, endBlockBatchItem1}, []inbox.DelayedMessage{delayed1}, nil)
+	err = core.DeliverMessagesAndWait(
+		ctx,
+		arbCore.Core,
+		big.NewInt(0),
+		common.Hash{},
+		[]inbox.SequencerBatchItem{delayedItem1, endBlockBatchItem1},
+		[]inbox.DelayedMessage{delayed1},
+		nil,
+	)
 	test.FailIfError(t, err)
 
 	err = core.DeliverMessagesAndWait(
+		ctx,
 		arbCore.Core,
 		big.NewInt(2),
 		endBlockBatchItem1.Accumulator,
@@ -167,11 +176,11 @@ func TestInboxProof(t *testing.T) {
 	test.FailIfError(t, err)
 
 	var cursors []core.ExecutionCursor
-	cursor, err := arbCore.Core.GetExecutionCursor(big.NewInt(0))
+	cursor, err := arbCore.Core.GetExecutionCursor(big.NewInt(0), true)
 	test.FailIfError(t, err)
 	cursors = append(cursors, cursor.Clone())
 	for {
-		err = arbCore.Core.AdvanceExecutionCursor(cursor, big.NewInt(1), true)
+		err = arbCore.Core.AdvanceExecutionCursor(cursor, big.NewInt(1), true, true)
 		test.FailIfError(t, err)
 		if cursor.TotalGasConsumed().Cmp(cursors[len(cursors)-1].TotalGasConsumed()) == 0 {
 			break
@@ -198,7 +207,7 @@ func TestInboxProof(t *testing.T) {
 		t.Log("Proving inbox opcode")
 
 		seqNum := beforeCursor.TotalMessagesRead()
-		batch, err := LookupBatchContaining(context.Background(), arbCore.Core, sequencerInboxWatcher, seqNum)
+		batch, err := sequencerInboxWatcher.LookupBatchContaining(context.Background(), arbCore.Core, seqNum)
 		test.FailIfError(t, err)
 		if batch == nil {
 			t.Fatal("Failed to lookup batch containing message")

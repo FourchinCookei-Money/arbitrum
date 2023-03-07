@@ -67,18 +67,18 @@ func parseBlockData(data []byte) (*machine.BlockInfo, error) {
 	}, nil
 }
 
-func serializeBlockData(header *types.Header, logIndex, logCount uint64) ([]byte, error) {
+func serializeBlockData(info *machine.BlockInfo) ([]byte, error) {
 	var blockData []byte
 
 	logIndexData := make([]byte, 8)
-	binary.BigEndian.PutUint64(logIndexData[:], logIndex)
+	binary.BigEndian.PutUint64(logIndexData[:], info.BlockLog)
 	blockData = append(blockData, logIndexData...)
 
 	logCountData := make([]byte, 8)
-	binary.BigEndian.PutUint64(logCountData[:], logCount)
+	binary.BigEndian.PutUint64(logCountData[:], info.LogCount)
 	blockData = append(blockData, logCountData...)
 
-	headerJSON, err := header.MarshalJSON()
+	headerJSON, err := info.Header.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +86,7 @@ func serializeBlockData(header *types.Header, logIndex, logCount uint64) ([]byte
 }
 
 func (as *NodeStore) SaveMessageBatch(batchNum *big.Int, logIndex uint64) error {
+	defer runtime.KeepAlive(as)
 	result := C.aggregatorSaveMessageBatch(as.c, unsafeDataPointer(math.U256Bytes(batchNum)), C.uint64_t(logIndex))
 	if result == 0 {
 		return errors.New("failed to save message batch")
@@ -95,6 +96,7 @@ func (as *NodeStore) SaveMessageBatch(batchNum *big.Int, logIndex uint64) error 
 }
 
 func (as *NodeStore) GetMessageBatch(batchNum *big.Int) *uint64 {
+	defer runtime.KeepAlive(as)
 	result := C.aggregatorGetMessageBatch(as.c, unsafeDataPointer(math.U256Bytes(batchNum)))
 	if result.found == 0 {
 		return nil
@@ -103,8 +105,9 @@ func (as *NodeStore) GetMessageBatch(batchNum *big.Int) *uint64 {
 	return &index
 }
 
-func (as *NodeStore) SaveBlock(header *types.Header, logIndex uint64, logCount uint64, requests []machine.EVMRequestInfo) error {
-	blockData, err := serializeBlockData(header, logIndex, logCount)
+func (as *NodeStore) SaveBlock(info *machine.BlockInfo, requests []machine.EVMRequestInfo) error {
+	defer runtime.KeepAlive(as)
+	blockData, err := serializeBlockData(info)
 	if err != nil {
 		return err
 	}
@@ -125,10 +128,10 @@ func (as *NodeStore) SaveBlock(header *types.Header, logIndex uint64, logCount u
 	if len(logIndexes) > 0 {
 		logIndexesPtr = &logIndexes[0]
 	}
-	headerHash := header.Hash().Bytes()
+	headerHash := info.Header.Hash().Bytes()
 	if C.aggregatorSaveBlock(
 		as.c,
-		C.uint64_t(header.Number.Uint64()),
+		C.uint64_t(info.Header.Number.Uint64()),
 		unsafeDataPointer(headerHash),
 		toByteSliceArrayView(byteSlices),
 		logIndexesPtr,
@@ -141,6 +144,7 @@ func (as *NodeStore) SaveBlock(header *types.Header, logIndex uint64, logCount u
 }
 
 func (as *NodeStore) BlockCount() (uint64, error) {
+	defer runtime.KeepAlive(as)
 	result := C.aggregatorBlockCount(as.c)
 	if result.found == 0 {
 		return 0, errors.New("failed to load block count")
@@ -150,6 +154,7 @@ func (as *NodeStore) BlockCount() (uint64, error) {
 }
 
 func (as *NodeStore) GetBlockInfo(height uint64) (*machine.BlockInfo, error) {
+	defer runtime.KeepAlive(as)
 	blockData := C.aggregatorGetBlock(as.c, C.uint64_t(height))
 	if blockData.found == 0 {
 		return nil, nil
@@ -158,6 +163,7 @@ func (as *NodeStore) GetBlockInfo(height uint64) (*machine.BlockInfo, error) {
 }
 
 func (as *NodeStore) Reorg(height uint64) error {
+	defer runtime.KeepAlive(as)
 	status := C.aggregatorReorg(as.c, C.uint64_t(height))
 	if status == 0 {
 		return errors.New("failed to reset node height")
@@ -166,6 +172,7 @@ func (as *NodeStore) Reorg(height uint64) error {
 }
 
 func (as *NodeStore) GetPossibleRequestInfo(requestId common.Hash) *uint64 {
+	defer runtime.KeepAlive(as)
 	result := C.aggregatorGetPossibleRequestInfo(as.c, unsafeDataPointer(requestId.Bytes()))
 	if result.found == 0 {
 		return nil
@@ -175,27 +182,11 @@ func (as *NodeStore) GetPossibleRequestInfo(requestId common.Hash) *uint64 {
 }
 
 func (as *NodeStore) GetPossibleBlock(blockHash common.Hash) *uint64 {
+	defer runtime.KeepAlive(as)
 	result := C.aggregatorGetPossibleBlock(as.c, unsafeDataPointer(blockHash.Bytes()))
 	if result.found == 0 {
 		return nil
 	}
 	index := uint64(result.value)
 	return &index
-}
-
-func (as *NodeStore) CurrentLogCount() (*big.Int, error) {
-	result := C.aggregatorLogsProcessedCount(as.c)
-	if result.found == 0 {
-		return nil, errors.New("failed to get processed log count")
-	}
-	return receiveBigInt(result.value), nil
-}
-
-func (as *NodeStore) UpdateCurrentLogCount(count *big.Int) error {
-	countData := math.U256Bytes(count)
-	status := C.aggregatorUpdateLogsProcessedCount(as.c, unsafeDataPointer(countData))
-	if status == 0 {
-		return errors.New("failed to update processed log count")
-	}
-	return nil
 }

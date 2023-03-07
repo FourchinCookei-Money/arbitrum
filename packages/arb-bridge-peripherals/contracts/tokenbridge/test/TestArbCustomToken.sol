@@ -21,11 +21,12 @@ pragma solidity ^0.6.11;
 import "../arbitrum/IArbToken.sol";
 import "../libraries/aeERC20.sol";
 
+/// @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
 contract TestArbCustomToken is aeERC20, IArbToken {
     address public l2Gateway;
     address public override l1Address;
 
-    modifier onlyGateway {
+    modifier onlyGateway() {
         require(msg.sender == l2Gateway, "ONLY_l2GATEWAY");
         _;
     }
@@ -44,5 +45,16 @@ contract TestArbCustomToken is aeERC20, IArbToken {
 
     function bridgeBurn(address account, uint256 amount) external override onlyGateway {
         _burn(account, amount);
+    }
+}
+
+contract MintableTestArbCustomToken is TestArbCustomToken {
+    constructor(address _l2Gateway, address _l1Address)
+        public
+        TestArbCustomToken(_l2Gateway, _l1Address)
+    {}
+
+    function userMint(address account, uint256 amount) external {
+        _mint(account, amount);
     }
 }

@@ -16,8 +16,13 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 interface INode {
     function initialize(
         address _rollup,
@@ -35,8 +40,6 @@ interface INode {
     function removeStaker(address staker) external;
 
     function childCreated(uint256) external;
-
-    function resetChildren() external;
 
     function newChildConfirmDeadline(uint256 deadline) external;
 
@@ -63,4 +66,6 @@ interface INode {
     function requirePastDeadline() external view;
 
     function requirePastChildConfirmDeadline() external view;
+
+    function isNitroReady() external pure returns (uint256);
 }

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-cmake_minimum_required (VERSION 3.5)
+cmake_minimum_required (VERSION 3.9)
 
 set (CMAKE_CXX_STANDARD 17)
 
@@ -75,7 +75,6 @@ target_link_libraries(
         avm
 PUBLIC
         avm_values
-        data_storage
         RocksDB::RocksDB
         Threads::Threads
         secp256k1

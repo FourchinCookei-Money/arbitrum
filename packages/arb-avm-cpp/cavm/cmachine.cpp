@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2020, Offchain Labs, Inc.
+ * Copyright 2019-2021, Offchain Labs, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,6 +51,12 @@ void machineDestroy(CMachine* m) {
     delete static_cast<Machine*>(m);
 }
 
+void machineAbort(CMachine* m) {
+    assert(m);
+    auto machine = static_cast<Machine*>(m);
+    machine->abort();
+}
+
 int machineHash(CMachine* m, void* ret) {
     assert(m);
     auto optionalHash = static_cast<Machine*>(m)->hash();
@@ -64,6 +70,8 @@ void* machineClone(CMachine* m) {
     assert(m);
     auto mach = static_cast<Machine*>(m);
     auto cloneMach = new Machine(*mach);
+    cloneMach->machine_state.code =
+        std::make_shared<RunningCode>(cloneMach->machine_state.code);
     return static_cast<void*>(cloneMach);
 }
 
@@ -127,7 +135,7 @@ CBlockReason machineIsBlocked(CMachine* m, int newMessages) {
     assert(m);
     auto mach = static_cast<Machine*>(m);
     auto blockReason = mach->isBlocked(newMessages != 0);
-    return std::visit(ReasonConverter{}, blockReason);
+    return visit(ReasonConverter{}, blockReason);
 }
 
 COneStepProof machineMarshallForProof(CMachine* m) {
@@ -170,7 +178,7 @@ void machineExecutionConfigSetMaxGas(CMachineExecutionConfig* c,
     assert(c);
     auto config = static_cast<MachineExecutionConfig*>(c);
     config->max_gas = max_gas;
-    config->go_over_gas = go_over_gas;
+    config->go_over_gas = go_over_gas != 0;
 }
 
 void machineExecutionConfigSetInboxMessages(CMachineExecutionConfig* c,
@@ -191,10 +199,24 @@ void machineExecutionConfigSetStopOnSideload(CMachineExecutionConfig* c,
                                              int stop_on_sideload) {
     assert(c);
     auto config = static_cast<MachineExecutionConfig*>(c);
-    config->stop_on_sideload = stop_on_sideload;
+    config->stop_on_sideload = stop_on_sideload != 0;
 }
 
-RawAssertion executeAssertion(CMachine* m, const CMachineExecutionConfig* c) {
+void machineExecutionConfigSetStopOnBreakpoint(CMachineExecutionConfig* c,
+                                               int stop_on_breakpoint) {
+    assert(c);
+    auto config = static_cast<MachineExecutionConfig*>(c);
+    config->stop_on_breakpoint = stop_on_breakpoint != 0;
+}
+
+void machineExecutionConfigSetTrace(CMachineExecutionConfig* c, int trace) {
+    assert(c);
+    auto config = static_cast<MachineExecutionConfig*>(c);
+    config->trace = trace != 0;
+}
+
+RawAssertionResult executeAssertion(CMachine* m,
+                                    const CMachineExecutionConfig* c) {
     assert(m);
     assert(c);
     auto mach = static_cast<Machine*>(m);
@@ -205,38 +227,47 @@ RawAssertion executeAssertion(CMachine* m, const CMachineExecutionConfig* c) {
         mach->machine_state.context.max_gas +=
             mach->machine_state.output.arb_gas_used;
         Assertion assertion = mach->run();
+        if (mach->isAborted()) {
+            return {makeEmptyAssertion(), false};
+        }
         std::vector<unsigned char> sendData;
         for (const auto& send : assertion.sends) {
             auto big_size = boost::endian::native_to_big(
-                static_cast<uint64_t>(send.size()));
+                static_cast<uint64_t>(send.val.size()));
             auto big_size_ptr = reinterpret_cast<const char*>(&big_size);
             sendData.insert(sendData.end(), big_size_ptr,
                             big_size_ptr + sizeof(big_size));
-            sendData.insert(sendData.end(), send.begin(), send.end());
+            sendData.insert(sendData.end(), send.val.begin(), send.val.end());
         }
 
         std::vector<unsigned char> logData;
         for (const auto& log : assertion.logs) {
-            marshal_value(log, logData);
+            marshal_value(log.val, logData, nullptr);
         }
 
         std::vector<unsigned char> debugPrintData;
-        for (const auto& debugPrint : assertion.debugPrints) {
-            marshal_value(debugPrint, debugPrintData);
+        int debugPrintDataCount = 0;
+        if (config->trace) {
+            for (const auto& debugPrint : assertion.debug_prints) {
+                debugPrintDataCount++;
+                marshal_value(debugPrint.val, debugPrintData, nullptr);
+            }
         }
 
         // TODO extend usage of uint256
-        return {intx::narrow_cast<uint64_t>(assertion.inbox_messages_consumed),
-                returnCharVector(sendData),
-                static_cast<int>(assertion.sends.size()),
-                returnCharVector(logData),
-                static_cast<int>(assertion.logs.size()),
-                returnCharVector(debugPrintData),
-                static_cast<int>(assertion.debugPrints.size()),
-                intx::narrow_cast<uint64_t>(assertion.stepCount),
-                intx::narrow_cast<uint64_t>(assertion.gasCount)};
+        return {
+            {intx::narrow_cast<uint64_t>(assertion.inbox_messages_consumed),
+             returnCharVector(sendData),
+             static_cast<int>(assertion.sends.size()),
+             returnCharVector(logData), static_cast<int>(assertion.logs.size()),
+             returnCharVector(debugPrintData), debugPrintDataCount,
+             intx::narrow_cast<uint64_t>(assertion.step_count),
+             intx::narrow_cast<uint64_t>(assertion.gas_count)},
+            false};
+    } catch (const DataStorage::shutting_down_exception& e) {
+        return {makeEmptyAssertion(), true};
     } catch (const std::exception& e) {
         std::cerr << "Failed to make assertion " << e.what() << "\n";
-        return makeEmptyAssertion();
+        return {makeEmptyAssertion(), false};
     }
 }

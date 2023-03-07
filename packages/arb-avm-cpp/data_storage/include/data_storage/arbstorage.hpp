@@ -39,24 +39,28 @@ class ArbStorage {
     std::shared_ptr<ArbCore> arb_core;
 
    public:
-    explicit ArbStorage(const std::string& db_path);
+    ArbStorage(const std::string& db_path, const ArbCoreConfig& coreConfig);
     bool closeArbStorage();
-    rocksdb::Status initialize(const LoadedExecutable& executable);
-    rocksdb::Status initialize(const std::string& executable_path);
+    void printDatabaseMetadata();
+    InitializeResult initialize(const LoadedExecutable& executable);
+    InitializeResult initialize(const std::string& executable_path);
+    InitializeResult applyConfig();
     [[nodiscard]] bool initialized() const;
 
     [[nodiscard]] std::unique_ptr<AggregatorStore> getAggregatorStore() const;
     [[nodiscard]] std::shared_ptr<ArbCore> getArbCore();
+    [[nodiscard]] std::shared_ptr<DataStorage> getDataStorage();
 
     [[nodiscard]] std::unique_ptr<Machine> getInitialMachine();
     [[nodiscard]] std::unique_ptr<Machine> getMachine(
         uint256_t machineHash,
         ValueCache& value_cache) const;
-    [[nodiscard]] DbResult<value> getValue(uint256_t value_hash,
+    [[nodiscard]] DbResult<Value> getValue(uint256_t value_hash,
                                            ValueCache& value_cache) const;
     [[nodiscard]] std::unique_ptr<ReadTransaction> makeReadTransaction();
     [[nodiscard]] std::unique_ptr<ReadWriteTransaction>
     makeReadWriteTransaction();
+    rocksdb::Status cleanupValidator();
 };
 
 #endif /* arbstorage_hpp */

@@ -16,11 +16,16 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
 import "./IBridge.sol";
 import "./IMessageProvider.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 interface IInbox is IMessageProvider {
     function sendL2Message(bytes calldata messageData) external returns (uint256);
 
@@ -67,7 +72,26 @@ interface IInbox is IMessageProvider {
         bytes calldata data
     ) external payable returns (uint256);
 
+    function unsafeCreateRetryableTicket(
+        address destAddr,
+        uint256 arbTxCallValue,
+        uint256 maxSubmissionCost,
+        address submissionRefundAddress,
+        address valueRefundAddress,
+        uint256 maxGas,
+        uint256 gasPriceBid,
+        bytes calldata data
+    ) external payable returns (uint256);
+
     function depositEth(uint256 maxSubmissionCost) external payable returns (uint256);
 
     function bridge() external view returns (IBridge);
+
+    function pauseCreateRetryables() external;
+
+    function unpauseCreateRetryables() external;
+
+    function startRewriteAddress() external;
+
+    function stopRewriteAddress() external;
 }

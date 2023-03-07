@@ -18,9 +18,12 @@ package cmdhelp
 
 import (
 	"flag"
+
 	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/rs/zerolog"
-	"os"
+
+	"github.com/offchainlabs/arbitrum/packages/arb-avm-cpp/cmachine"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 )
 
 func AddLogFlags(fs *flag.FlagSet) (*string, *string) {
@@ -29,7 +32,7 @@ func AddLogFlags(fs *flag.FlagSet) (*string, *string) {
 	return gethLogLevel, arbLogLevel
 }
 
-func ParseLogFlags(gethLogLevel, arbLogLevel *string) error {
+func ParseLogFlags(gethLogLevel, arbLogLevel *string, coreHandler gethlog.Handler) error {
 	gethLevel, err := gethlog.LvlFromString(*gethLogLevel)
 	if err != nil {
 		return err
@@ -39,6 +42,20 @@ func ParseLogFlags(gethLogLevel, arbLogLevel *string) error {
 		return err
 	}
 	zerolog.SetGlobalLevel(arbLevel)
-	gethlog.Root().SetHandler(gethlog.LvlFilterHandler(gethLevel, gethlog.StreamHandler(os.Stderr, gethlog.TerminalFormat(true))))
+	h := gethlog.LvlFilterHandler(gethLevel, coreHandler)
+	h = gethlog.CallerFuncHandler(h)
+	gethlog.Root().SetHandler(h)
+	return nil
+}
+
+func PrintDatabaseMetadata(path string, coreConfig *configuration.Core) error {
+	storage, err := cmachine.NewArbStorage(path, coreConfig)
+	if err != nil {
+		return err
+	}
+	defer storage.CloseArbStorage()
+
+	storage.PrintDatabaseMetadata()
+
 	return nil
 }

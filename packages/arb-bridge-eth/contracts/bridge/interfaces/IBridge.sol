@@ -16,8 +16,13 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 interface IBridge {
     event MessageDelivered(
         uint256 indexed messageIndex,
@@ -27,6 +32,17 @@ interface IBridge {
         address sender,
         bytes32 messageDataHash
     );
+
+    event BridgeCallTriggered(
+        address indexed outbox,
+        address indexed destAddr,
+        uint256 amount,
+        bytes data
+    );
+
+    event InboxToggle(address indexed inbox, bool enabled);
+
+    event OutboxToggle(address indexed outbox, bool enabled);
 
     function deliverMessageToInbox(
         uint8 kind,
@@ -56,4 +72,6 @@ interface IBridge {
     function inboxAccs(uint256 index) external view returns (bytes32);
 
     function messageCount() external view returns (uint256);
+
+    function isNitroReady() external view returns (uint256);
 }

@@ -53,6 +53,7 @@ const (
 	ForbiddenSender           ResultType = 13
 	SequenceNumberTooLow      ResultType = 14
 	SequenceNumberTooHigh     ResultType = 15
+	ExecutionRanOutOfGas      ResultType = 16
 )
 
 func (r ResultType) String() string {
@@ -87,6 +88,8 @@ func (r ResultType) String() string {
 		return "SequenceNumberTooLow"
 	case SequenceNumberTooHigh:
 		return "SequenceNumberTooHigh"
+	case ExecutionRanOutOfGas:
+		return "ExecutionRanOutOfGas"
 	default:
 		return fmt.Sprintf("%v", int(r))
 	}
@@ -187,6 +190,8 @@ func HandleCallError(res *TxResult, ganacheMode bool) error {
 	} else if res.ResultCode == SequenceNumberTooHigh {
 		// Maintain error message backwards compatibility
 		return errors.New("invalid transaction nonce")
+	} else if res.ResultCode == ExecutionRanOutOfGas {
+		return errors.New("execution ran out of gas")
 	} else {
 		return errors.Errorf("execution reverted: error code %v", res.ResultCode)
 	}
@@ -267,6 +272,42 @@ func (r *TxResult) CalcGasUsed() *big.Int {
 	}
 }
 
+func (r *TxResult) CalcGasUsedForL1() *big.Int {
+	if r.FeeStats.Price.L2Computation.Cmp(big.NewInt(0)) == 0 {
+		return r.GasUsed
+	} else {
+		paidL1Sum := new(big.Int).Add(r.FeeStats.Paid.L1Transaction, r.FeeStats.Paid.L1Calldata)
+		return new(big.Int).Div(paidL1Sum, r.FeeStats.Price.L2Computation)
+	}
+}
+
+func (r *TxResult) IsContractCreation() bool {
+	if r.IncomingRequest.Kind == message.L2Type || r.IncomingRequest.Kind == message.EthDepositTxType {
+		msg, err := message.L2Message{Data: r.IncomingRequest.Data}.AbstractMessage()
+		if err == nil {
+			if msg, ok := msg.(message.AbstractTransaction); ok {
+				if msg.Destination() == (common.Address{}) {
+					if r.GasUsed.BitLen() > 0 {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (r *TxResult) GetCreatedContractAddress() (ethcommon.Address, bool) {
+	contractAddress := ethcommon.Address{}
+	if len(r.ReturnData) == 32 {
+		copy(contractAddress[:], r.ReturnData[12:])
+		return contractAddress, true
+	} else {
+		logger.Warn().Str("txresult", r.String()).Msg("incorrect returndata size in ToEthReceipt")
+		return contractAddress, false
+	}
+}
+
 func (r *TxResult) ToEthReceipt(blockHash common.Hash) *types.Receipt {
 	contractAddress := ethcommon.Address{}
 	if r.IncomingRequest.Kind == message.L2Type && r.ResultCode == ReturnCode {
@@ -284,14 +325,15 @@ func (r *TxResult) ToEthReceipt(blockHash common.Hash) *types.Receipt {
 			}
 		}
 	}
-
-	status := uint64(0)
+	status := types.ReceiptStatusFailed
 	if r.ResultCode == ReturnCode {
-		status = 1
+		status = types.ReceiptStatusSuccessful
 	}
 
 	evmLogs := r.EthLogs(blockHash)
 	return &types.Receipt{
+		Type:              types.ArbitrumLegacyTxType,
+		GasUsedForL1:      r.CalcGasUsedForL1().Uint64(),
 		PostState:         []byte{0},
 		Status:            status,
 		CumulativeGasUsed: r.CumulativeGas.Uint64(),
@@ -533,8 +575,8 @@ func NewResultFromValue(val value.Value) (Result, error) {
 	}
 
 	if kindInt.BigInt().Uint64() == 0 {
-		if tup.Len() != 6 {
-			return nil, errors.Errorf("tx result expected tuple of length 6, but recieved len %v: %v", tup.Len(), tup)
+		if tup.Len() != 6 && tup.Len() != 7 {
+			return nil, errors.Errorf("tx result expected tuple of length 6 or 7, but recieved len %v: %v", tup.Len(), tup)
 		}
 
 		// Tuple size already verified above, so error can be ignored

@@ -26,7 +26,10 @@ import "../bridge/Messages.sol";
 import "../libraries/BytesLib.sol";
 
 // Originally forked from https://github.com/leapdao/solEVM-enforcer/tree/master
-
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract OneStepProof is OneStepProofCommon {
     using Machine for Machine.Data;
     using Hashing for Value.Data;
@@ -264,9 +267,8 @@ contract OneStepProof is OneStepProofCommon {
     }
 
     function executeStackemptyInsn(AssertionContext memory context) internal pure {
-        bool empty =
-            context.stack.length == 0 &&
-                context.afterMachine.dataStack.hash() == Value.newEmptyTuple().hash();
+        bool empty = context.stack.length == 0 &&
+            context.afterMachine.dataStack.hash() == Value.newEmptyTuple().hash();
         pushVal(context.stack, Value.newBoolean(empty));
     }
 
@@ -283,9 +285,8 @@ contract OneStepProof is OneStepProofCommon {
     }
 
     function executeAuxstackemptyInsn(AssertionContext memory context) internal pure {
-        bool empty =
-            context.auxstack.length == 0 &&
-                context.afterMachine.auxStack.hash() == Value.newEmptyTuple().hash();
+        bool empty = context.auxstack.length == 0 &&
+            context.afterMachine.auxStack.hash() == Value.newEmptyTuple().hash();
         pushVal(context.stack, Value.newBoolean(empty));
     }
 
@@ -442,8 +443,11 @@ contract OneStepProof is OneStepProofCommon {
             (context.offset, gasPriceL1) = Marshaling.deserializeInt(proof, context.offset);
             uint256 messageDataLength;
             (context.offset, messageDataLength) = Marshaling.deserializeInt(proof, context.offset);
-            bytes32 messageBufHash =
-                Hashing.bytesToBufferHash(proof, context.offset, messageDataLength);
+            bytes32 messageBufHash = Hashing.bytesToBufferHash(
+                proof,
+                context.offset,
+                messageDataLength
+            );
 
             uint256 offset = context.offset;
             bytes32 messageDataHash;
@@ -613,11 +617,11 @@ contract OneStepProof is OneStepProofCommon {
             handleOpcodeError(context);
             return;
         }
-        context.afterMachine.arbGasRemaining = val1.intVal;
+        context.afterMachine.avmGasRemaining = val1.intVal;
     }
 
     function executePushGasInsn(AssertionContext memory context) internal pure {
-        pushVal(context.stack, Value.newInt(context.afterMachine.arbGasRemaining));
+        pushVal(context.stack, Value.newInt(context.afterMachine.avmGasRemaining));
     }
 
     function executeErrCodePointInsn(AssertionContext memory context) internal pure {

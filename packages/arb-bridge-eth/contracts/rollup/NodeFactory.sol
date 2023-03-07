@@ -24,13 +24,18 @@ import "./INodeFactory.sol";
 import "@openzeppelin/contracts/proxy/BeaconProxy.sol";
 import "@openzeppelin/contracts/proxy/UpgradeableBeacon.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract NodeFactory is INodeFactory {
-    UpgradeableBeacon public beacon;
+    address public override beacon;
 
     constructor() public {
         address templateContract = address(new Node());
-        beacon = new UpgradeableBeacon(templateContract);
-        beacon.transferOwnership(msg.sender);
+        UpgradeableBeacon _beacon = new UpgradeableBeacon(templateContract);
+        _beacon.transferOwnership(msg.sender);
+        beacon = address(_beacon);
     }
 
     function createNode(
@@ -40,7 +45,7 @@ contract NodeFactory is INodeFactory {
         uint256 _prev,
         uint256 _deadlineBlock
     ) external override returns (address) {
-        address clone = address(new BeaconProxy(address(beacon), ""));
+        address clone = address(new BeaconProxy(beacon, ""));
         Node(clone).initialize(
             msg.sender,
             _stateHash,

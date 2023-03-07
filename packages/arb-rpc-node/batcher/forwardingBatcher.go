@@ -1,5 +1,5 @@
 /*
- * Copyright 2020, Offchain Labs, Inc.
+ * Copyright 2020-2021, Offchain Labs, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,10 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	ethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/pkg/errors"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/snapshot"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
@@ -35,7 +34,6 @@ import (
 
 type Forwarder struct {
 	client     *ethclient.Client
-	newTxFeed  event.Feed
 	aggregator *common.Address
 }
 
@@ -79,28 +77,21 @@ func NewForwarder(ctx context.Context, config configuration.Forwarder) (*Forward
 }
 
 // Return nil if no pending transaction count is available
-func (b *Forwarder) PendingTransactionCount(ctx context.Context, account common.Address) *uint64 {
+func (b *Forwarder) PendingTransactionCount(ctx context.Context, account common.Address) (*uint64, error) {
 	nonce, err := b.client.PendingNonceAt(ctx, account.ToEthAddress())
 	if err != nil {
-		logger.Error().Stack().Err(err).Hex("account", account.Bytes()).Msg("Error fetching pending nonce from arb-node")
-		return nil
+		return nil, errors.Wrap(err, "error fetching pending nonce from forwarding target")
 	}
-	return &nonce
+	return &nonce, nil
 }
 
 func (b *Forwarder) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	logger.Info().Str("hash", tx.Hash().String()).Msg("got user tx")
-	txes := []*types.Transaction{tx}
-	b.newTxFeed.Send(core.NewTxsEvent{Txs: txes})
 	return b.client.SendTransaction(ctx, tx)
 }
 
-func (b *Forwarder) PendingSnapshot() (*snapshot.Snapshot, error) {
+func (b *Forwarder) PendingSnapshot(_ context.Context) (*snapshot.Snapshot, error) {
 	return nil, nil
-}
-
-func (b *Forwarder) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
-	return b.newTxFeed.Subscribe(ch)
 }
 
 func (b *Forwarder) Aggregator() *common.Address {

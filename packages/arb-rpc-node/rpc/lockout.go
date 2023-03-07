@@ -18,16 +18,13 @@ package rpc
 
 import (
 	"context"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
 	"math/big"
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
-
-	ethcore "github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/event"
+	"github.com/pkg/errors"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/monitor"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/batcher"
@@ -37,7 +34,7 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
 )
 
-var logger = log.With().Caller().Stack().Str("component", "rpc").Logger()
+var logger = arblog.Logger.With().Str("component", "rpc").Logger()
 
 type LockoutBatcher struct {
 	// Mutex protects currentBatcher and lockoutExpiresAt
@@ -54,6 +51,7 @@ type LockoutBatcher struct {
 	currentSeq          string
 	lastLockedSeqNum    *big.Int
 	currentBatcher      batcher.TransactionBatcher
+	deadUntil           time.Time
 }
 
 func SetupLockout(
@@ -84,9 +82,10 @@ func SetupLockout(
 }
 
 const ACCEPTABLE_SEQ_NUM_GAP int64 = 0
+const SEQUENCER_INIT_FATAL_ERROR_BACKOFF time.Duration = time.Minute * 5
 
-func (b *LockoutBatcher) getErrorBatcher(err error) *errorBatcher {
-	return &errorBatcher{
+func (b *LockoutBatcher) getErrorBatcher(err error) *ErrorBatcher {
+	return &ErrorBatcher{
 		err:        err,
 		aggregator: b.sequencerBatcher.Aggregator(),
 	}
@@ -120,8 +119,8 @@ func (b *LockoutBatcher) lockoutManager(ctx context.Context) {
 		}
 	})()
 	for {
-		alive := true
-		if !b.hasSequencerLockout() {
+		alive := time.Now().After(b.deadUntil)
+		if alive && !b.hasSequencerLockout() {
 			currentSeqNum, err := b.core.GetMessageCount()
 			if err != nil {
 				logger.Warn().Err(err).Msg("error getting sequence number")
@@ -156,6 +155,7 @@ func (b *LockoutBatcher) lockoutManager(ctx context.Context) {
 			if b.livelinessExpiresAt.After(time.Now()) {
 				b.redis.acquireOrUpdateLockout(ctx, &b.lockoutExpiresAt)
 			}
+			var fatalError error
 			if b.hasSequencerLockout() {
 				if b.currentBatcher != b.sequencerBatcher {
 					logger.Info().Str("rpc", b.config.SelfRPCURL).Msg("acquired sequencer lockout")
@@ -169,7 +169,7 @@ func (b *LockoutBatcher) lockoutManager(ctx context.Context) {
 							select {
 							case <-ctx.Done():
 								return
-							case <-time.After(5 * time.Second):
+							case <-time.After(1 * time.Second):
 							}
 						}
 						if currentSeqNum.Cmp(targetSeqNum) >= 0 {
@@ -180,29 +180,51 @@ func (b *LockoutBatcher) lockoutManager(ctx context.Context) {
 								Msg("caught up to previous sequencer position")
 							break
 						}
-						if attemptCatchupUntil.After(time.Now()) {
+						if time.Now().After(attemptCatchupUntil) {
+							msg := "failed to catch up to previous sequencer position"
 							logger.
 								Warn().
 								Str("targetSeqNum", targetSeqNum.String()).
 								Str("currentSeqNum", currentSeqNum.String()).
-								Msg("failed to catch up to previous sequencer position")
-							// There's a limited gap possible here as we checked it previously for liveliness
-							// Therefore, we continue as the sequencer regardless, as such a gap is acceptable
+								Msg(msg)
+							fatalError = errors.New(msg)
 							break
 						}
-						time.Sleep(500 * time.Millisecond)
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(100 * time.Millisecond):
+						}
+					}
+					if fatalError == nil && b.hasSequencerLockout() {
+						err := b.sequencerBatcher.SequenceDelayedMessages(ctx, true)
+						if err != nil {
+							fatalError = errors.Wrap(err, "failed to sequence delayed messages")
+						}
 					}
 				}
-				b.currentBatcher = b.sequencerBatcher
-				b.currentSeq = b.config.SelfRPCURL
+				if fatalError == nil {
+					b.currentBatcher = b.sequencerBatcher
+					b.currentSeq = b.config.SelfRPCURL
+				} else {
+					logger.Warn().Err(fatalError).Msg("failed to initialize sequencer after acquiring lockout")
+					b.currentBatcher = b.getErrorBatcher(fatalError)
+					b.currentSeq = "[error initializing sequencer]"
+				}
 				b.mutex.Unlock()
 				holdingMutex = false
-				seqNum, err := b.core.GetMessageCount()
-				if err == nil {
-					b.redis.updateLatestSeqNum(ctx, seqNum, b.lockoutExpiresAt)
-					b.lastLockedSeqNum = seqNum
+				if fatalError == nil {
+					seqNum, err := b.core.GetMessageCount()
+					if err == nil {
+						b.redis.updateLatestSeqNum(ctx, seqNum, b.lockoutExpiresAt)
+						b.lastLockedSeqNum = seqNum
+					} else {
+						logger.Warn().Err(err).Msg("error getting sequence number")
+					}
 				} else {
-					logger.Warn().Err(err).Msg("error getting sequence number")
+					b.redis.releaseLockout(ctx, &b.lockoutExpiresAt)
+					b.redis.releaseLiveliness(ctx, &b.livelinessExpiresAt)
+					b.deadUntil = time.Now().Add(SEQUENCER_INIT_FATAL_ERROR_BACKOFF)
 				}
 			}
 		} else if b.currentSeq != selectedSeq {
@@ -250,7 +272,7 @@ func (b *LockoutBatcher) lockoutManager(ctx context.Context) {
 			}
 		}
 		refreshDelay := time.Millisecond * 500
-		if b.hasSequencerLockout() {
+		if b.currentBatcher == b.sequencerBatcher && b.hasSequencerLockout() {
 			firstLockoutExpiresAt := b.lockoutExpiresAt
 			if b.livelinessExpiresAt.Before(firstLockoutExpiresAt) {
 				firstLockoutExpiresAt = b.livelinessExpiresAt
@@ -288,7 +310,7 @@ func (b *LockoutBatcher) getBatcher() batcher.TransactionBatcher {
 	return b.currentBatcher
 }
 
-func (b *LockoutBatcher) PendingTransactionCount(ctx context.Context, account common.Address) *uint64 {
+func (b *LockoutBatcher) PendingTransactionCount(ctx context.Context, account common.Address) (*uint64, error) {
 	return b.getBatcher().PendingTransactionCount(ctx, account)
 }
 
@@ -296,12 +318,8 @@ func (b *LockoutBatcher) SendTransaction(ctx context.Context, tx *types.Transact
 	return b.getBatcher().SendTransaction(ctx, tx)
 }
 
-func (b *LockoutBatcher) PendingSnapshot() (*snapshot.Snapshot, error) {
-	return b.getBatcher().PendingSnapshot()
-}
-
-func (b *LockoutBatcher) SubscribeNewTxsEvent(ch chan<- ethcore.NewTxsEvent) event.Subscription {
-	return b.sequencerBatcher.SubscribeNewTxsEvent(ch)
+func (b *LockoutBatcher) PendingSnapshot(ctx context.Context) (*snapshot.Snapshot, error) {
+	return b.getBatcher().PendingSnapshot(ctx)
 }
 
 func (b *LockoutBatcher) Aggregator() *common.Address {
@@ -312,30 +330,26 @@ func (b *LockoutBatcher) Start(ctx context.Context) {
 	b.sequencerBatcher.Start(ctx)
 }
 
-type errorBatcher struct {
+type ErrorBatcher struct {
 	err        error
 	aggregator *common.Address
 }
 
-func (b *errorBatcher) PendingTransactionCount(ctx context.Context, account common.Address) *uint64 {
-	return nil
-}
-
-func (b *errorBatcher) SendTransaction(ctx context.Context, tx *types.Transaction) error {
-	return b.err
-}
-
-func (b *errorBatcher) PendingSnapshot() (*snapshot.Snapshot, error) {
+func (b *ErrorBatcher) PendingTransactionCount(_ context.Context, _ common.Address) (*uint64, error) {
 	return nil, b.err
 }
 
-func (b *errorBatcher) SubscribeNewTxsEvent(ch chan<- ethcore.NewTxsEvent) event.Subscription {
-	return nil
+func (b *ErrorBatcher) SendTransaction(_ context.Context, _ *types.Transaction) error {
+	return b.err
 }
 
-func (b *errorBatcher) Aggregator() *common.Address {
+func (b *ErrorBatcher) PendingSnapshot(_ context.Context) (*snapshot.Snapshot, error) {
+	return nil, b.err
+}
+
+func (b *ErrorBatcher) Aggregator() *common.Address {
 	return b.aggregator
 }
 
-func (b *errorBatcher) Start(ctx context.Context) {
+func (b *ErrorBatcher) Start(_ context.Context) {
 }

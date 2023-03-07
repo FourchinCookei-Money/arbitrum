@@ -27,10 +27,18 @@ import "../arch/IOneStepProof.sol";
 
 import "./ChallengeLib.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract Challenge is Cloneable, IChallenge {
     using SafeMath for uint256;
 
-    enum Turn { NoChallenge, Asserter, Challenger }
+    enum Turn {
+        NoChallenge,
+        Asserter,
+        Challenger
+    }
 
     event InitiatedChallenge();
     event Bisected(
@@ -46,16 +54,12 @@ contract Challenge is Cloneable, IChallenge {
 
     // Can only initialize once
     string private constant CHAL_INIT_STATE = "CHAL_INIT_STATE";
-    // Can only bisect assertion in response to a challenge
-    string private constant BIS_STATE = "BIS_STATE";
     // deadline expired
     string private constant BIS_DEADLINE = "BIS_DEADLINE";
     // Only original asserter can continue bisect
     string private constant BIS_SENDER = "BIS_SENDER";
     // Incorrect previous state
     string private constant BIS_PREV = "BIS_PREV";
-    // Invalid assertion selected
-    string private constant CON_PROOF = "CON_PROOF";
     // Can't timeout before deadline
     string private constant TIMEOUT_DEADLINE = "TIMEOUT_DEADLINE";
 
@@ -80,7 +84,7 @@ contract Challenge is Cloneable, IChallenge {
     // This is the root of a merkle tree with nodes like (prev, next, steps)
     bytes32 public challengeState;
 
-    modifier onlyOnTurn {
+    modifier onlyOnTurn() {
         require(msg.sender == currentResponder(), BIS_SENDER);
         require(block.number.sub(lastMoveBlock) <= currentResponderTimeLeft(), BIS_DEADLINE);
 
@@ -158,8 +162,8 @@ contract Challenge is Cloneable, IChallenge {
         if (_chainHashes[_chainHashes.length - 1] != UNREACHABLE_ASSERTION) {
             require(_challengedSegmentLength > 1, "TOO_SHORT");
         }
-        uint256 challengeExecutionBisectionDegree =
-            resultReceiver.challengeExecutionBisectionDegree();
+        uint256 challengeExecutionBisectionDegree = resultReceiver
+            .challengeExecutionBisectionDegree();
         require(
             _chainHashes.length ==
                 bisectionDegree(_challengedSegmentLength, challengeExecutionBisectionDegree) + 1,
@@ -178,13 +182,12 @@ contract Challenge is Cloneable, IChallenge {
             "invalid segment length"
         );
 
-        bytes32 bisectionHash =
-            ChallengeLib.bisectionChunkHash(
-                _challengedSegmentStart,
-                _challengedSegmentLength,
-                _chainHashes[0],
-                _oldEndHash
-            );
+        bytes32 bisectionHash = ChallengeLib.bisectionChunkHash(
+            _challengedSegmentStart,
+            _challengedSegmentLength,
+            _chainHashes[0],
+            _oldEndHash
+        );
         require(
             ChallengeLib.verifySegmentProof(
                 challengeState,
@@ -195,12 +198,11 @@ contract Challenge is Cloneable, IChallenge {
             BIS_PREV
         );
 
-        bytes32 newChallengeState =
-            ChallengeLib.updatedBisectionRoot(
-                _chainHashes,
-                _challengedSegmentStart,
-                _challengedSegmentLength
-            );
+        bytes32 newChallengeState = ChallengeLib.updatedBisectionRoot(
+            _chainHashes,
+            _challengedSegmentStart,
+            _challengedSegmentLength
+        );
         challengeState = newChallengeState;
 
         emit Bisected(
@@ -222,13 +224,12 @@ contract Challenge is Cloneable, IChallenge {
     ) external onlyOnTurn {
         bytes32 beforeChainHash = ChallengeLib.assertionHash(_gasUsedBefore, _assertionRest);
 
-        bytes32 bisectionHash =
-            ChallengeLib.bisectionChunkHash(
-                _challengedSegmentStart,
-                _challengedSegmentLength,
-                beforeChainHash,
-                _oldEndHash
-            );
+        bytes32 bisectionHash = ChallengeLib.bisectionChunkHash(
+            _challengedSegmentStart,
+            _challengedSegmentLength,
+            beforeChainHash,
+            _oldEndHash
+        );
         require(
             ChallengeLib.verifySegmentProof(
                 challengeState,
@@ -268,11 +269,12 @@ contract Challenge is Cloneable, IChallenge {
         bytes memory _executionProof,
         bytes memory _bufferProof,
         uint8 prover
-    ) public onlyOnTurn {
+    ) external onlyOnTurn {
         bytes32 rootHash;
         {
-            (uint64 gasUsed, uint256 totalMessagesRead, bytes32[4] memory proofFields) =
-                executors[prover].executeStep(
+            (uint64 gasUsed, uint256 totalMessagesRead, bytes32[4] memory proofFields) = executors[
+                prover
+            ].executeStep(
                     bridges,
                     _initialMessagesRead,
                     _initialAccs,
@@ -368,11 +370,15 @@ contract Challenge is Cloneable, IChallenge {
     }
 
     function _currentWin() private {
-        if (turn == Turn.Asserter) {
-            _asserterWin();
-        } else {
-            _challengerWin();
-        }
+        // As a safety measure, challenges can only be resolved by timeouts during mainnet beta.
+        // As state is 0, no move is possible. The other party will lose via timeout
+        challengeState = bytes32(0);
+
+        // if (turn == Turn.Asserter) {
+        //     _asserterWin();
+        // } else {
+        //     _challengerWin();
+        // }
     }
 
     function _asserterWin() private {

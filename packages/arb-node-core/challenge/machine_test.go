@@ -25,9 +25,9 @@ import (
 
 	"github.com/offchainlabs/arbitrum/packages/arb-avm-cpp/cmachine"
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/arbos"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgetestcontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/test"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgetestcontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/test"
 )
 
 func getTester(t *testing.T) *ethbridgetestcontracts.MachineTester {
@@ -42,7 +42,7 @@ func getTester(t *testing.T) *ethbridgetestcontracts.MachineTester {
 
 func TestDeserializeMachine(t *testing.T) {
 	machineTester := getTester(t)
-	arbosPath, err := arbos.Path()
+	arbosPath, err := arbos.Path(false)
 	test.FailIfError(t, err)
 	machine, err := cmachine.New(arbosPath)
 	test.FailIfError(t, err)

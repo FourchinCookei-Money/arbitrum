@@ -25,11 +25,12 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	ethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
+	"github.com/pkg/errors"
+
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
-	"github.com/pkg/errors"
 )
 
 var bisectedID ethcommon.Hash
@@ -123,6 +124,24 @@ func (c *ChallengeWatcher) ChallengeState(ctx context.Context) (common.Hash, err
 	return common.NewHashFromEth(challengeState), nil
 }
 
+func (c *ChallengeWatcher) IsTimedOut(ctx context.Context) (bool, error) {
+	currentBlock, err := c.client.BlockInfoByNumber(ctx, nil)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	lastMoveBlock, err := c.con.LastMoveBlock(c.getCallOpts(ctx))
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	timeLeft, err := c.con.CurrentResponderTimeLeft(c.getCallOpts(ctx))
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	timeSinceLastMove := new(big.Int).Sub((*big.Int)(currentBlock.Number), lastMoveBlock)
+	return timeSinceLastMove.Cmp(timeLeft) > 0, nil
+}
+
 func (c *ChallengeWatcher) LookupBisection(ctx context.Context, challengeState common.Hash) (*core.Bisection, error) {
 	var query = ethereum.FilterQuery{
 		BlockHash: nil,
@@ -146,9 +165,9 @@ func (c *ChallengeWatcher) LookupBisection(ctx context.Context, challengeState c
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	cuts := make([]core.Cut, 0, len(parsedLog.ChainHashes))
+	cuts := make([]common.Hash, 0, len(parsedLog.ChainHashes))
 	for _, ch := range parsedLog.ChainHashes {
-		cuts = append(cuts, core.NewSimpleCut(ch))
+		cuts = append(cuts, ch)
 	}
 	challengeSegment := &core.ChallengeSegment{
 		Start:  parsedLog.ChallengedSegmentStart,

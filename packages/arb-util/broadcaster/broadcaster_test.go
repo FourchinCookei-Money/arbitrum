@@ -27,27 +27,20 @@ import (
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/cmdhelp"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
 )
 
+var chainId = uint64(5555)
+
 func TestBroadcasterSendsConfirmedAccumulatorMessages(t *testing.T) {
 	ctx := context.Background()
 
-	broadcasterSettings := configuration.FeedOutput{
-		Addr:          "0.0.0.0",
-		IOTimeout:     2 * time.Second,
-		Port:          "9642",
-		Ping:          5 * time.Second,
-		ClientTimeout: 20 * time.Second,
-		Queue:         1,
-		Workers:       128,
-	}
+	broadcasterSettings := configuration.DefaultFeedOutput()
 
-	b := NewBroadcaster(broadcasterSettings)
+	b := NewBroadcaster(broadcasterSettings, chainId)
 
-	err := b.Start(ctx)
+	_, err := b.Start(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +58,8 @@ func TestBroadcasterSendsConfirmedAccumulatorMessages(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	// Confirmed Accumulator will also broadcast to the clients.
+	// Only previous accumulator will also broadcast to the clients, so send twice for test
+	b.ConfirmedAccumulator(feedItem.BatchItem.Accumulator) // remove the first message we generated
 	b.ConfirmedAccumulator(feedItem.BatchItem.Accumulator) // remove the first message we generated
 
 	acc := <-accumulatorConfirmed
@@ -155,19 +149,12 @@ func TestBroadcasterRespondsToPing(t *testing.T) {
 	t.Skip("Server is not responding to ping anymore")
 	ctx := context.Background()
 
-	broadcasterSettings := configuration.FeedOutput{
-		Addr:          "0.0.0.0",
-		IOTimeout:     2 * time.Second,
-		Port:          "9643",
-		Ping:          5 * time.Second,
-		ClientTimeout: 20 * time.Second,
-		Queue:         1,
-		Workers:       128,
-	}
+	broadcasterSettings := configuration.DefaultFeedOutput()
+	broadcasterSettings.Port = "9643"
 
-	b := NewBroadcaster(broadcasterSettings)
+	b := NewBroadcaster(broadcasterSettings, chainId)
 
-	err := b.Start(ctx)
+	_, err := b.Start(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,22 +197,15 @@ func TestBroadcasterRespondsToPing(t *testing.T) {
 }
 
 func TestBroadcasterReorganizesCacheBasedOnAccumulator(t *testing.T) {
-	ctx, cancelFunc, _ := cmdhelp.CreateLaunchContext()
+	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
 
-	broadcasterSettings := configuration.FeedOutput{
-		Addr:          "0.0.0.0",
-		IOTimeout:     2 * time.Second,
-		Port:          "9642",
-		Ping:          5 * time.Second,
-		ClientTimeout: 30 * time.Second,
-		Queue:         1,
-		Workers:       128,
-	}
+	broadcasterSettings := configuration.DefaultFeedOutput()
+	broadcasterSettings.ClientTimeout = 30
 
-	b := NewBroadcaster(broadcasterSettings)
+	b := NewBroadcaster(broadcasterSettings, chainId)
 
-	err := b.Start(ctx)
+	_, err := b.Start(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +218,6 @@ func TestBroadcasterReorganizesCacheBasedOnAccumulator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1 * time.Second)
 
 	hash2, feedItem2, signature2 := newBroadcastMessage()
 	err = b.BroadcastSingle(hash2, feedItem2.BatchItem, signature2.Bytes())
@@ -259,8 +238,16 @@ func TestBroadcasterReorganizesCacheBasedOnAccumulator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if b.MessageCacheCount() != 2 {
-		t.Errorf("1. Failed to reorganized cached inbox message. MessageCacheCount: %v", b.MessageCacheCount())
+	updateTimeout := time.After(2 * time.Second)
+	for {
+		if b.MessageCacheCount() == 2 {
+			break
+		}
+		select {
+		case <-updateTimeout:
+			t.Fatalf("Failed to reorganized cached inbox message. MessageCacheCount: %v", b.MessageCacheCount())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 
 	//TODO: Add some more assertions about the state of the cache

@@ -17,7 +17,7 @@
 package dev
 
 import (
-	"math/big"
+	"context"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -25,21 +25,18 @@ import (
 
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/arbos"
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/arboscontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/metrics"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/test"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/arbostestcontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/web3"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/protocol"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/test"
 )
 
 func TestWhitelist(t *testing.T) {
 	skipBelowVersion(t, 25)
+	ctx := context.Background()
 	config := protocol.ChainParams{
-		StakeRequirement:          big.NewInt(10),
-		StakeToken:                common.Address{},
 		GracePeriod:               common.NewTimeBlocksInt(3),
-		MaxExecutionSteps:         10000000000,
 		ArbGasSpeedLimitPerSecond: 2000000000000,
 	}
 	senderKey, err := crypto.GenerateKey()
@@ -47,7 +44,7 @@ func TestWhitelist(t *testing.T) {
 	test.FailIfError(t, err)
 	owner := crypto.PubkeyToAddress(ownerKey.PublicKey)
 
-	backend, _, srv, cancelDevNode := NewTestDevNode(t, *arbosfile, config, common.NewAddressFromEth(owner), nil)
+	backend, _, srv, cancelDevNode := NewSimpleTestDevNode(t, config, common.NewAddressFromEth(owner))
 	defer cancelDevNode()
 
 	senderAuth, err := bind.NewKeyedTransactorWithChainID(senderKey, backend.chainID)
@@ -55,7 +52,7 @@ func TestWhitelist(t *testing.T) {
 	ownerAuth, err := bind.NewKeyedTransactorWithChainID(ownerKey, backend.chainID)
 	test.FailIfError(t, err)
 
-	client := web3.NewEthClient(srv, true, metrics.NewMetricsConfig(nil))
+	client := web3.NewEthClient(srv, true)
 
 	_, _, simple, err := arbostestcontracts.DeploySimple(senderAuth, client)
 	test.FailIfError(t, err)
@@ -67,7 +64,7 @@ func TestWhitelist(t *testing.T) {
 	test.FailIfError(t, err)
 
 	_, err = simple.Exists(senderAuth)
-	if err == nil {
+	if err == nil && arbosVersion < 55 {
 		t.Error()
 	}
 
@@ -80,8 +77,18 @@ func TestWhitelist(t *testing.T) {
 	_, err = arbOwner.AllowOnlyOwnerToSend(ownerAuth)
 	test.FailIfError(t, err)
 
+	if doUpgrade {
+		UpgradeTestDevNode(t, ctx, backend, srv, ownerAuth)
+	}
+
+	allowed, err := arbOwner.IsAllowedSender(&bind.CallOpts{}, common.RandAddress().ToEthAddress())
+	test.FailIfError(t, err)
+	if allowed {
+		t.Error("disallowed sender listed as allowed")
+	}
+
 	_, err = simple.Exists(senderAuth)
-	if err == nil {
+	if err == nil && !(arbosVersion >= 55 || (arbosVersion == 54 && doUpgrade)) {
 		t.Error("tx should fail")
 	}
 	if arbosVersion >= 31 {
@@ -98,4 +105,10 @@ func TestWhitelist(t *testing.T) {
 
 	_, err = simple.Exists(senderAuth)
 	test.FailIfError(t, err)
+
+	allowed, err = arbOwner.IsAllowedSender(&bind.CallOpts{From: owner}, senderAuth.From)
+	test.FailIfError(t, err)
+	if !allowed {
+		t.Error("ArbOwner IsAllowedSender says sender isn't allowed, but they are")
+	}
 }

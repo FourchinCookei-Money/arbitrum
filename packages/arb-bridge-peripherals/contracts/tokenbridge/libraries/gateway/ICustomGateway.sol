@@ -16,11 +16,12 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
 // import "./ITokenGateway.sol";
 
-// interface IGatewayRouter is ITokenGateway {
+/// @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
 interface ICustomGateway {
     function l1ToL2Token(address _l1Token) external view returns (address _l2Token);
 

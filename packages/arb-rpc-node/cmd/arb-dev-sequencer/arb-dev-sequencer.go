@@ -1,5 +1,5 @@
 /*
- * Copyright 2020, Offchain Labs, Inc.
+ * Copyright 2020-2021, Offchain Labs, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arblog"
 	"io/ioutil"
 	golog "log"
 	"math/big"
@@ -31,6 +32,7 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	gethlog "github.com/ethereum/go-ethereum/log"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -40,18 +42,19 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/arbos"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/cmdhelp"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridge"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/metrics"
 	"github.com/offchainlabs/arbitrum/packages/arb-node-core/monitor"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/aggregator"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/dev"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/rpc"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/txdb"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/web3"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/arbtransaction"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/broadcaster"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/configuration"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/transactauth"
 )
 
 var logger zerolog.Logger
@@ -73,7 +76,7 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	// Print line number that log was created on
-	logger = log.With().Caller().Stack().Str("component", "arb-node").Logger()
+	logger = arblog.Logger.With().Str("component", "arb-dev-sequencer").Logger()
 
 	if err := startup(); err != nil {
 		logger.Error().Err(err).Msg("Error running node")
@@ -93,6 +96,18 @@ func startup() error {
 	privKeyString := fs.String("privkey", "979f020f6f6f71577c09db93ba944c89945f10fade64cfc7eb26137d5816fb76", "funded private key")
 	//fundedAccount := fs.String("account", "0x9a6C04fBf4108E2c1a1306534A126381F99644cf", "account to fund")
 	chainId64 := fs.Uint64("chainId", 68799, "chain id of chain")
+
+	config := configuration.Config{
+		Core: *configuration.DefaultCoreSettingsMaxExecution(),
+		Feed: configuration.Feed{
+			Output: *configuration.DefaultFeedOutput(),
+		},
+		Node: *configuration.DefaultNodeSettings(),
+	}
+	config.Node.Sequencer.CreateBatchBlockInterval = *createBatchBlockInterval
+	config.Node.Sequencer.DelayedMessagesTargetDelay = *delayedMessagesTargetDelay
+	config.Feed.Output.Workers = 2
+
 	//go http.ListenAndServe("localhost:6060", nil)
 
 	err := fs.Parse(os.Args[1:])
@@ -105,7 +120,7 @@ func startup() error {
 		return errors.New("invalid arguments")
 	}
 
-	if err := cmdhelp.ParseLogFlags(gethLogLevel, arbLogLevel); err != nil {
+	if err := cmdhelp.ParseLogFlags(gethLogLevel, arbLogLevel, gethlog.StreamHandler(os.Stderr, gethlog.TerminalFormat(true))); err != nil {
 		return err
 	}
 
@@ -127,7 +142,7 @@ func startup() error {
 		return errors.Wrap(err, "error running NewRPcEthClient")
 	}
 
-	arbosPath, err := arbos.Path()
+	arbosPath, err := arbos.Path(false)
 	if err != nil {
 		return err
 	}
@@ -165,6 +180,9 @@ func startup() error {
 	}
 
 	ownerPrivKey, err := crypto.GenerateKey()
+	if err != nil {
+		return err
+	}
 	l1OwnerAuth, err := bind.NewKeyedTransactorWithChainID(ownerPrivKey, l1ChainId)
 	if err != nil {
 		return err
@@ -190,7 +208,7 @@ func startup() error {
 	if err != nil {
 		return errors.Wrap(err, "error creating rollup")
 	}
-	receipt, err := ethbridge.WaitForReceiptWithResults(ctx, ethclint, deployer.From, tx, "CreateRollup")
+	receipt, err := transactauth.WaitForReceiptWithResults(ctx, ethclint, deployer.From, arbtransaction.NewArbTransaction(tx), "CreateRollup", transactauth.NewEthArbReceiptFetcher(ethclint))
 	if err != nil {
 		return errors.Wrap(err, "error getting transaction receipt")
 	}
@@ -221,7 +239,7 @@ func startup() error {
 		}
 	}()
 
-	mon, err := monitor.NewMonitor(dbPath, arbosPath)
+	mon, err := monitor.NewInitializedMonitor(dbPath, arbosPath, &config.Core)
 	if err != nil {
 		return errors.Wrap(err, "error opening monitor")
 	}
@@ -229,9 +247,23 @@ func startup() error {
 
 	dummySequencerFeed := make(chan broadcaster.BroadcastFeedMessage)
 	var inboxReader *monitor.InboxReader
+	var inboxReaderDone chan bool
 	for {
-		inboxReader, err = mon.StartInboxReader(ctx, ethclint, rollupAddress, 0, bridgeUtilsAddress, nil, dummySequencerFeed)
+		inboxReader, inboxReaderDone, err = mon.StartInboxReader(
+			ctx,
+			ethclint,
+			rollupAddress,
+			0,
+			bridgeUtilsAddress,
+			nil,
+			dummySequencerFeed,
+			config.Node.InboxReader,
+		)
 		if err == nil {
+			break
+		}
+		if common.IsFatalError(err) {
+			logger.Error().Err(err).Msg("aborting inbox reader start")
 			break
 		}
 		logger.Warn().Err(err).
@@ -281,22 +313,9 @@ func startup() error {
 		Auth:        seqAuth,
 		Core:        mon.Core,
 		InboxReader: inboxReader,
-		Config: configuration.Sequencer{
-			CreateBatchBlockInterval:   *createBatchBlockInterval,
-			DelayedMessagesTargetDelay: *delayedMessagesTargetDelay,
-		},
-	}
-	settings := configuration.FeedOutput{
-		Addr:          "127.0.0.1",
-		IOTimeout:     2 * time.Second,
-		Port:          "9642",
-		Ping:          5 * time.Second,
-		ClientTimeout: 15 * time.Second,
-		Queue:         1,
-		Workers:       2,
 	}
 
-	db, txDBErrChan, err := txdb.New(ctx, mon.Core, mon.Storage.GetNodeStore(), 100*time.Millisecond)
+	db, txDBErrChan, err := txdb.New(ctx, mon.Core, mon.Storage.GetNodeStore(), &config.Node)
 	if err != nil {
 		return errors.Wrap(err, "error opening txdb")
 	}
@@ -306,7 +325,7 @@ func startup() error {
 		return crypto.Sign(hash, seqPrivKey)
 	}
 
-	batch, err := rpc.SetupBatcher(
+	batch, broadcasterErrChan, err := rpc.SetupBatcher(
 		ctx,
 		ethclint,
 		rollupAddress,
@@ -315,13 +334,14 @@ func startup() error {
 		time.Duration(5)*time.Second,
 		batcherMode,
 		signer,
-		settings,
+		&config,
+		&config.Wallet,
 	)
 	if err != nil {
 		return err
 	}
 
-	srv := aggregator.NewServer(batch, rollupAddress, l2ChainId, db)
+	srv := aggregator.NewServer(batch, l2ChainId, db)
 
 	// TODO: Add back in funding of fundedAccount
 	// Note: The dev sequencer isn't being used anywhere currently
@@ -347,7 +367,7 @@ func startup() error {
 		return err
 	}
 
-	web3Server, err := web3.GenerateWeb3Server(srv, nil, false, nil, metrics.NewMetricsConfig(nil))
+	web3Server, err := web3.GenerateWeb3Server(srv, nil, web3.DefaultConfig, mon.CoreConfig, nil, inboxReader)
 	if err != nil {
 		return err
 	}
@@ -373,8 +393,12 @@ func startup() error {
 	select {
 	case err := <-txDBErrChan:
 		return err
+	case err := <-broadcasterErrChan:
+		return err
 	case err := <-errChan:
 		return err
+	case <-inboxReaderDone:
+		return nil
 	case <-cancelChan:
 		return nil
 	}

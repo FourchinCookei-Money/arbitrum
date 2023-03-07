@@ -24,8 +24,8 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/core"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/ethutils"
@@ -59,8 +59,8 @@ func NewRollup(address ethcommon.Address, fromBlock int64, client ethutils.EthCl
 	}, nil
 }
 
-func (r *Rollup) RejectNextNode(ctx context.Context, staker common.Address) error {
-	_, err := r.builderCon.RejectNextNode(authWithContext(ctx, r.builderAuth), staker.ToEthAddress())
+func (r *Rollup) RejectNextNode(ctx context.Context, staker ethcommon.Address) error {
+	_, err := r.builderCon.RejectNextNode(authWithContext(ctx, r.builderAuth), staker)
 	return errors.WithStack(err)
 }
 
@@ -81,7 +81,8 @@ func (r *Rollup) ConfirmNextNode(ctx context.Context, assertion *core.Assertion,
 		assertion.After.LogAcc,
 		assertion.After.TotalLogCount,
 	)
-	return errors.WithStack(err)
+	// Do not use errors.WithStack so that any existing error stack is preserved
+	return err
 }
 
 func (r *Rollup) NewStake(ctx context.Context, amount *big.Int) error {
@@ -170,5 +171,13 @@ func (r *Rollup) RemoveZombie(ctx context.Context, zombieNum *big.Int, maxNodes 
 
 func (r *Rollup) RemoveOldZombies(ctx context.Context, startIndex *big.Int) error {
 	_, err := r.builderCon.RemoveOldZombies(authWithContext(ctx, r.builderAuth), startIndex)
+	return errors.WithStack(err)
+}
+
+func (r *Rollup) WithdrawFunds(ctx context.Context, destination common.Address) error {
+	_, err := r.builderCon.WithdrawStakerFunds(
+		authWithContext(ctx, r.builderAuth),
+		destination.ToEthAddress(),
+	)
 	return errors.WithStack(err)
 }

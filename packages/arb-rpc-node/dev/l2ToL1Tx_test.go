@@ -33,27 +33,25 @@ import (
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/arboscontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/evm"
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/message"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/metrics"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/test"
 	"github.com/offchainlabs/arbitrum/packages/arb-rpc-node/web3"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/protocol"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/test"
 )
 
 func TestL2ToL1Tx(t *testing.T) {
+	ctx := context.Background()
 	config := protocol.ChainParams{
-		StakeRequirement:          big.NewInt(10),
-		StakeToken:                common.Address{},
 		GracePeriod:               common.NewTimeBlocksInt(3),
-		MaxExecutionSteps:         10000000000,
 		ArbGasSpeedLimitPerSecond: 2000000000000,
 	}
 
-	backend, db, srv, cancelDevNode := NewTestDevNode(t, *arbosfile, config, common.RandAddress(), nil)
+	upgraderAuth, upgraderAccount := OptsAddressPair(t, nil)
+	backend, db, srv, cancelDevNode := NewSimpleTestDevNode(t, config, upgraderAccount)
 	defer cancelDevNode()
 
-	client := web3.NewEthClient(srv, true, metrics.NewMetricsConfig(nil))
+	client := web3.NewEthClient(srv, true)
 	arbSys, err := arboscontracts.NewArbSys(arbos.ARB_SYS_ADDRESS, client)
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +75,12 @@ func TestL2ToL1Tx(t *testing.T) {
 			},
 		}),
 	}
-	if _, err := backend.AddInboxMessage(deposit, common.RandAddress()); err != nil {
+	if _, err := backend.AddInboxMessage(ctx, deposit, common.RandAddress()); err != nil {
 		t.Fatal(err)
+	}
+
+	if doUpgrade {
+		UpgradeTestDevNode(t, ctx, backend, srv, upgraderAuth)
 	}
 
 	latest, err := backend.db.LatestBlock()
@@ -111,7 +113,7 @@ func TestL2ToL1Tx(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		arbRes, err := backend.db.GetRequest(common.NewHashFromEth(tx.Hash()))
+		arbRes, _, _, err := backend.db.GetRequest(common.NewHashFromEth(tx.Hash()))
 		test.FailIfError(t, err)
 		if len(arbRes.ReturnData) != 32 {
 			t.Fatal("expected return data")
@@ -138,7 +140,8 @@ func TestL2ToL1Tx(t *testing.T) {
 		}
 		l2SendLogs = append(l2SendLogs, parsedEv)
 		if i%8 == 0 {
-			backend.l1Emulator.IncreaseTime(20)
+			// ArbOS spaces out sends every 1800 seconds by default, so advance one send
+			backend.l1Emulator.IncreaseTime(1800)
 		}
 	}
 
@@ -147,6 +150,9 @@ func TestL2ToL1Tx(t *testing.T) {
 		batch, err := db.GetMessageBatch(big.NewInt(int64(i)))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if batch == nil {
+			t.Fatal("message batch not found")
 		}
 		if batch.BatchNumber.Cmp(big.NewInt(int64(i))) != 0 {
 			t.Fatal("wrong batch num")
@@ -220,27 +226,10 @@ func TestL2ToL1Tx(t *testing.T) {
 	clnt.Commit()
 
 	for i, batch := range batches {
-		outboxEntryAddress, err := outbox.Outboxes(&bind.CallOpts{}, big.NewInt(int64(i)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		outboxEntry, err := ethbridgecontracts.NewOutboxEntry(outboxEntryAddress, clnt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		root, err := outboxEntry.Root(&bind.CallOpts{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		root, err := outbox.OutboxEntries(&bind.CallOpts{}, big.NewInt(int64(i)))
+		test.FailIfError(t, err)
 		if root != batch.Tree.Hash() {
 			t.Fatal("wrong root")
-		}
-		numRemaining, err := outboxEntry.NumRemaining(&bind.CallOpts{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if numRemaining.Cmp(batch.NumInBatch) != 0 {
-			t.Fatal("wrong num remaining")
 		}
 	}
 

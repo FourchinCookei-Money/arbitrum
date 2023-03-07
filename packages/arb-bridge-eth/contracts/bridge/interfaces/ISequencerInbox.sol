@@ -16,8 +16,13 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 interface ISequencerInbox {
     event SequencerBatchDelivered(
         uint256 indexed firstMessageNum,
@@ -48,9 +53,21 @@ interface ISequencerInbox {
         uint256 seqBatchIndex
     );
 
-    event SequencerAddressUpdated(address newAddress);
+    /// @notice DEPRECATED - look at IsSequencerUpdated for new updates
+    // event SequencerAddressUpdated(address newAddress);
 
-    function setSequencer(address newSequencer) external;
+    event IsSequencerUpdated(address addr, bool isSequencer);
+    event MaxDelayUpdated(uint256 newMaxDelayBlocks, uint256 newMaxDelaySeconds);
+    event ShutdownForNitroSet(bool shutdown);
+
+    /// @notice DEPRECATED - look at MaxDelayUpdated for new updates
+    // event MaxDelayBlocksUpdated(uint256 newValue);
+    /// @notice DEPRECATED - look at MaxDelayUpdated for new updates
+    // event MaxDelaySecondsUpdated(uint256 newValue);
+
+    function setMaxDelay(uint256 newMaxDelayBlocks, uint256 newMaxDelaySeconds) external;
+
+    function setIsSequencer(address addr, bool isSequencer) external;
 
     function messageCount() external view returns (uint256);
 
@@ -62,8 +79,13 @@ interface ISequencerInbox {
 
     function getInboxAccsLength() external view returns (uint256);
 
-    function proveBatchContainsSequenceNumber(bytes calldata proof, uint256 inboxCount)
+    function proveInboxContainsMessage(bytes calldata proof, uint256 inboxCount)
         external
         view
         returns (uint256, bytes32);
+
+    /// @notice DEPRECATED - use isSequencer instead
+    function sequencer() external view returns (address);
+
+    function isSequencer(address seq) external view returns (bool);
 }

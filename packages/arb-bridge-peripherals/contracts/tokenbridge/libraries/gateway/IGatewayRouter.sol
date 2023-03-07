@@ -18,8 +18,27 @@
 
 pragma solidity ^0.6.11;
 
-import "./ITokenGateway.sol";
+import "arb-bridge-eth/contracts/libraries/ProxyUtil.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "./TokenGateway.sol";
+import "./GatewayMessageHandler.sol";
 
+/**
+ * @title Common interface for L1 and L2 Gateway Routers
+ * @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
+ */
 interface IGatewayRouter is ITokenGateway {
-    function isRouter() external view returns (bool);
+    function defaultGateway() external view returns (address gateway);
+
+    event TransferRouted(
+        address indexed token,
+        address indexed _userFrom,
+        address indexed _userTo,
+        address gateway
+    );
+
+    event GatewaySet(address indexed l1Token, address indexed gateway);
+    event DefaultGatewayUpdated(address newDefaultGateway);
+
+    function getGateway(address _token) external view returns (address gateway);
 }

@@ -25,9 +25,9 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 
 	"github.com/offchainlabs/arbitrum/packages/arb-evm/message"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/ethbridgecontracts"
-	"github.com/offchainlabs/arbitrum/packages/arb-node-core/test"
 	"github.com/offchainlabs/arbitrum/packages/arb-util/common"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/ethbridgecontracts"
+	"github.com/offchainlabs/arbitrum/packages/arb-util/test"
 )
 
 func TestRetryable(t *testing.T) {
@@ -47,9 +47,9 @@ func TestRetryable(t *testing.T) {
 	test.FailIfError(t, err)
 	arbTx := message.RetryableTx{
 		Destination:       common.RandAddress(),
-		Value:             common.RandBigInt(),
-		Deposit:           big.NewInt(1000),
-		MaxSubmissionCost: common.RandBigInt(),
+		Value:             big.NewInt(13425),
+		Deposit:           big.NewInt(10000000000),
+		MaxSubmissionCost: big.NewInt(100000),
 		CreditBack:        common.RandAddress(),
 		Beneficiary:       common.RandAddress(),
 		MaxGas:            common.RandBigInt(),

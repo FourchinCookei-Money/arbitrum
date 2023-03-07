@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-
+// solhint-disable-next-line compiler-version
 pragma solidity >=0.6.0 <0.8.0;
 
 import "@openzeppelin/contracts/proxy/BeaconProxy.sol";
 import "@openzeppelin/contracts/proxy/UpgradeableBeacon.sol";
 import "@openzeppelin/contracts/utils/Create2.sol";
 
+/// @notice DEPRECATED - see new repo(https://github.com/OffchainLabs/token-bridge-contracts) for new updates
 interface ProxySetter {
     function beacon() external view returns (address);
 }
@@ -35,7 +36,7 @@ contract BeaconProxyFactory is ProxySetter {
     }
 
     function createProxy(bytes32 userSalt) external returns (address) {
-        // consumer should check if createdContract == address(0), ie fail deploy
+        // deployment will fail and this function will revert if contract `salt` is not unique
         bytes32 salt = getSalt(msg.sender, userSalt);
         address createdContract = address(new ClonableBeaconProxy{ salt: salt }());
         return createdContract;

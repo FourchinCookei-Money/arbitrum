@@ -23,10 +23,23 @@ pragma experimental ABIEncoderV2;
 import "../rollup/Rollup.sol";
 import "../challenge/IChallenge.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract ValidatorUtils {
-    enum ConfirmType { NONE, VALID, INVALID }
+    enum ConfirmType {
+        NONE,
+        VALID,
+        INVALID
+    }
 
-    enum NodeConflict { NONE, FOUND, INDETERMINATE, INCOMPLETE }
+    enum NodeConflict {
+        NONE,
+        FOUND,
+        INDETERMINATE,
+        INCOMPLETE
+    }
 
     function getConfig(Rollup rollup)
         external
@@ -34,13 +47,13 @@ contract ValidatorUtils {
         returns (
             uint256 confirmPeriodBlocks,
             uint256 extraChallengeTimeBlocks,
-            uint256 arbGasSpeedLimitPerBlock,
+            uint256 avmGasSpeedLimitPerBlock,
             uint256 baseStake
         )
     {
         confirmPeriodBlocks = rollup.confirmPeriodBlocks();
         extraChallengeTimeBlocks = rollup.extraChallengeTimeBlocks();
-        arbGasSpeedLimitPerBlock = rollup.arbGasSpeedLimitPerBlock();
+        avmGasSpeedLimitPerBlock = rollup.avmGasSpeedLimitPerBlock();
         baseStake = rollup.baseStake();
     }
 

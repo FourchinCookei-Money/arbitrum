@@ -16,8 +16,13 @@
  * limitations under the License.
  */
 
-pragma solidity ^0.6.11;
+// solhint-disable-next-line compiler-version
+pragma solidity >=0.6.9 <0.9.0;
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 interface INodeFactory {
     function createNode(
         bytes32 _stateHash,
@@ -26,4 +31,6 @@ interface INodeFactory {
         uint256 _prev,
         uint256 _deadlineBlock
     ) external returns (address);
+
+    function beacon() external view returns (address);
 }

@@ -1,19 +1,18 @@
-FROM debian:bullseye-slim
+### --------------------------------------------------------------------
+### Dockerfile
+### integration-base
+### --------------------------------------------------------------------
 
-RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && \
-    apt-get install -y curl git librocksdb-dev libgmp-dev sudo netcat-openbsd nodejs npm gcc g++ && \
-    rm -rf /var/lib/apt/lists/* && \
-    curl https://dl.google.com/go/go1.15.2.linux-amd64.tar.gz --output go1.15.2.linux-amd64.tar.gz && \
-    tar -xf go1.15.2.linux-amd64.tar.gz && \
-    mv go /usr/local && \
-    useradd -ms /bin/bash user
+FROM offchainlabs/backend-base:0.6.1
+
+USER root
+WORKDIR /
+
+RUN curl -fsSL https://deb.nodesource.com/setup_14.x | bash - && \
+    curl -sL https://dl.yarnpkg.com/debian/pubkey.gpg | gpg --dearmor > /usr/share/keyrings/yarnkey.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/yarnkey.gpg] https://dl.yarnpkg.com/debian stable main" > /etc/apt/sources.list.d/yarn.list && \
+    apt-get update && apt-get install yarn
 USER user
 WORKDIR /home/user/
-ENV PATH="/usr/local/go/bin:/home/user/go/bin:/home/user/bin:/home/user/.local/bin:/home/user/.npm-global/bin:/home/user/.yarn/bin:${PATH}"
-RUN mkdir -p /home/user/.npm-global && \
-    npm config set prefix "/home/user/.npm-global" && \
-    npm install -g yarn && \
-    export GOROOT=/usr/local/go && \
-    mkdir bin && curl -s https://codecov.io/bash > ~/bin/codecovbash && \
-    chmod +x /home/user/bin/codecovbash && \
-    go get gotest.tools/gotestsum
+ENV PATH="/home/user/go/bin:/home/user/bin:/home/user/.local/bin:/usr/local/go/bin:/usr/local/cargo/bin:/home/user/.npm-global/bin:/home/user/.yarn/bin:${PATH}" \
+    GOROOT=/usr/local/go

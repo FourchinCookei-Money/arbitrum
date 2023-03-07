@@ -3,14 +3,25 @@
 pragma solidity ^0.6.11;
 
 import "../Rollup.sol";
+import "../INode.sol";
 import "./IRollupFacets.sol";
+import { NitroReadyMagicNums } from "../../bridge/NitroMigratorUtil.sol";
 import "../../bridge/interfaces/IOutbox.sol";
 import "../../bridge/interfaces/ISequencerInbox.sol";
 import "../../libraries/Whitelist.sol";
 
 import "@openzeppelin/contracts/proxy/UpgradeableBeacon.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract RollupAdminFacet is RollupBase, IRollupAdmin {
+    event NodeDestroyedInMigration(uint256 nodeNum);
+    event ChallengeDestroyedInMigration(address challenge);
+    event StakerWithdrawnInMigration(address staker);
+
     /**
      * Functions are only to reach this facet if the caller is the owner
      * so there is no need for a redundant onlyOwner check
@@ -47,7 +58,8 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
     }
 
     /**
-     * @notice Pause interaction with the rollup contract
+     * @notice Pause interaction with the rollup contract.
+     * The time spent paused is not incremented in the rollup's timing for node validation.
      */
     function pause() external override {
         _pause();
@@ -65,7 +77,7 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
     /**
      * @notice Set the addresses of rollup logic facets called
      * @param newAdminFacet address of logic that owner of rollup calls
-     * @param newUserFacet ddress of logic that user of rollup calls
+     * @param newUserFacet address of logic that user of rollup calls
      */
     function setFacets(address newAdminFacet, address newUserFacet) external override {
         facets[0] = newAdminFacet;
@@ -127,16 +139,16 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
 
     /**
      * @notice Set speed limit per block
-     * @param newArbGasSpeedLimitPerBlock maximum arbgas to be used per block
+     * @param newAvmGasSpeedLimitPerBlock maximum avmgas to be used per block
      */
-    function setArbGasSpeedLimitPerBlock(uint256 newArbGasSpeedLimitPerBlock) external override {
-        arbGasSpeedLimitPerBlock = newArbGasSpeedLimitPerBlock;
+    function setAvmGasSpeedLimitPerBlock(uint256 newAvmGasSpeedLimitPerBlock) external override {
+        avmGasSpeedLimitPerBlock = newAvmGasSpeedLimitPerBlock;
         emit OwnerFunctionCalled(11);
     }
 
     /**
      * @notice Set base stake required for an assertion
-     * @param newBaseStake maximum arbgas to be used per block
+     * @param newBaseStake minimum amount of stake required
      */
     function setBaseStake(uint256 newBaseStake) external override {
         baseStake = newBaseStake;
@@ -155,27 +167,19 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
     }
 
     /**
-     * @notice Set max delay in blocks for sequencer inbox
+     * @notice Set max delay for sequencer inbox
      * @param newSequencerInboxMaxDelayBlocks max number of blocks
-     */
-    function setSequencerInboxMaxDelayBlocks(uint256 newSequencerInboxMaxDelayBlocks)
-        external
-        override
-    {
-        sequencerInboxMaxDelayBlocks = newSequencerInboxMaxDelayBlocks;
-        emit OwnerFunctionCalled(14);
-    }
-
-    /**
-     * @notice Set max delay in seconds for sequencer inbox
      * @param newSequencerInboxMaxDelaySeconds max number of seconds
      */
-    function setSequencerInboxMaxDelaySeconds(uint256 newSequencerInboxMaxDelaySeconds)
-        external
-        override
-    {
-        sequencerInboxMaxDelaySeconds = newSequencerInboxMaxDelaySeconds;
-        emit OwnerFunctionCalled(15);
+    function setSequencerInboxMaxDelay(
+        uint256 newSequencerInboxMaxDelayBlocks,
+        uint256 newSequencerInboxMaxDelaySeconds
+    ) external override {
+        ISequencerInbox(sequencerBridge).setMaxDelay(
+            newSequencerInboxMaxDelayBlocks,
+            newSequencerInboxMaxDelaySeconds
+        );
+        emit OwnerFunctionCalled(14);
     }
 
     /**
@@ -227,8 +231,8 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
      * @notice Updates a sequencer address at the sequencer inbox
      * @param newSequencer new sequencer address to be used
      */
-    function setSequencer(address newSequencer) external override {
-        ISequencerInbox(sequencerBridge).setSequencer(newSequencer);
+    function setIsSequencer(address newSequencer, bool isSequencer) external override {
+        ISequencerInbox(sequencerBridge).setIsSequencer(newSequencer, isSequencer);
         emit OwnerFunctionCalled(19);
     }
 
@@ -242,80 +246,178 @@ contract RollupAdminFacet is RollupBase, IRollupAdmin {
         emit OwnerFunctionCalled(20);
     }
 
-    /*
-    function forceResolveChallenge(address[] memory stackerA, address[] memory stackerB) external override whenPaused {
-        require(stackerA.length == stackerB.length, "WRONG_LENGTH");
-        for (uint256 i = 0; i < stackerA.length; i++) {
-            address chall = inChallenge(stackerA[i], stackerB[i]);
+    function forceResolveChallenge(address[] memory stakerA, address[] memory stakerB)
+        external
+        override
+        whenPaused
+    {
+        require(stakerA.length == stakerB.length, "WRONG_LENGTH");
+        for (uint256 i = 0; i < stakerA.length; i++) {
+            address chall = inChallenge(stakerA[i], stakerB[i]);
 
             require(address(0) != chall, "NOT_IN_CHALL");
-            clearChallenge(stackerA[i]);
-            clearChallenge(stackerB[i]);
+            clearChallenge(stakerA[i]);
+            clearChallenge(stakerB[i]);
 
             IChallenge(chall).clearChallenge();
         }
+        emit OwnerFunctionCalled(21);
     }
 
-    function forceRefundStaker(address[] memory stacker) external override whenPaused {
-        for (uint256 i = 0; i < stacker.length; i++) {
-            withdrawStaker(stacker[i]);
+    function forceRefundStaker(address[] memory staker) external override whenPaused {
+        for (uint256 i = 0; i < staker.length; i++) {
+            reduceStakeTo(staker[i], 0);
+            turnIntoZombie(staker[i]);
         }
+        emit OwnerFunctionCalled(22);
     }
 
     function forceCreateNode(
         bytes32 expectedNodeHash,
         bytes32[3][2] calldata assertionBytes32Fields,
         uint256[4][2] calldata assertionIntFields,
+        bytes calldata sequencerBatchProof,
         uint256 beforeProposedBlock,
         uint256 beforeInboxMaxCount,
-        uint256 prevNode,
-        uint256 deadlineBlock,
-        uint256 sequencerBatchEnd,
-        bytes32 sequencerBatchAcc
+        uint256 prevNode
     ) external override whenPaused {
         require(prevNode == latestConfirmed(), "ONLY_LATEST_CONFIRMED");
 
-        RollupLib.Assertion memory assertion =
-                RollupLib.decodeAssertion(
-                    assertionBytes32Fields,
-                    assertionIntFields,
-                    beforeProposedBlock,
-                    beforeInboxMaxCount,
-                    sequencerBridge.messageCount()
-                );
+        RollupLib.Assertion memory assertion = RollupLib.decodeAssertion(
+            assertionBytes32Fields,
+            assertionIntFields,
+            beforeProposedBlock,
+            beforeInboxMaxCount,
+            sequencerBridge.messageCount()
+        );
 
-        bytes32 nodeHash =
-            _newNode(
-                assertion,
-                deadlineBlock,
-                sequencerBatchEnd,
-                sequencerBatchAcc,
-                prevNode,
-                getNodeHash(prevNode),
-                false
-            );
-        // TODO: should we add a stake?
-        
-        require(expectedNodeHash == nodeHash, "NOT_EXPECTED_HASH");
+        createNewNode(
+            assertion,
+            assertionBytes32Fields,
+            assertionIntFields,
+            sequencerBatchProof,
+            CreateNodeDataFrame({
+                avmGasSpeedLimitPerBlock: avmGasSpeedLimitPerBlock,
+                confirmPeriodBlocks: confirmPeriodBlocks,
+                prevNode: prevNode,
+                sequencerInbox: sequencerBridge,
+                rollupEventBridge: rollupEventBridge,
+                nodeFactory: nodeFactory
+            }),
+            expectedNodeHash
+        );
+
+        emit OwnerFunctionCalled(23);
     }
 
     function forceConfirmNode(
+        uint256 nodeNum,
+        bytes32 beforeSendAcc,
         bytes calldata sendsData,
-        uint256[] calldata sendLengths
+        uint256[] calldata sendLengths,
+        uint256 afterSendCount,
+        bytes32 afterLogAcc,
+        uint256 afterLogCount
     ) external override whenPaused {
-        outbox.processOutgoingMessages(sendsData, sendLengths);
-
-        confirmLatestNode();
-
-        rollupEventBridge.nodeConfirmed(latestConfirmed());
-
-        // emit NodeConfirmed(
-        //     firstUnresolved,
-        //     afterSendAcc,
-        //     afterSendCount,
-        //     afterLogAcc,
-        //     afterLogCount
-        // );
+        // this skips deadline, staker and zombie validation
+        confirmNode(
+            nodeNum,
+            beforeSendAcc,
+            sendsData,
+            sendLengths,
+            afterSendCount,
+            afterLogAcc,
+            afterLogCount,
+            outbox,
+            rollupEventBridge
+        );
+        emit OwnerFunctionCalled(24);
     }
-    */
+
+    /// @dev this function is intended to be called as part of the shutdown process of the classic contracts in favour of nitro
+    /// It is expected that the rollup is not paused during the start of shutdown step, the shutdown procedure will pause the rollup.
+    /// A final rollup node number is specified, then the rollup will only allow that node and its direct predecessors to be confirmed.
+    /// All nodes that aren't directly previous to this are deleted, but in practice none are expected to be present (as this would mean an eventual challenge).
+    /// Even though the rollup is paused, we use the `shutdownForNitroMode` var to allow validators to go through the sequence of final nodes confirming them so their send values are added to the outbox
+    /// The deadline for the nodes marked as final are ignored to a lower value to allow for these faster confirmations, which will make L2 to L1 txs available for execution sooner
+    function shutdownForNitro(
+        uint256 finalNodeNum,
+        bool destroyAlternatives,
+        bool destroyChallenges
+    ) external whenNotPaused {
+        require(!shutdownForNitroMode(), "ALREADY_SHUTDOWN_MODE");
+        // TODO: prove that final node num includes the last send by arbos
+
+        // first we destroy all nodes that aren't in the correct chain
+        uint256 latestConfirmedNodeNum = latestConfirmed();
+        uint256 curr = latestNodeCreated();
+        uint256 expectedPrev = finalNodeNum;
+        // if finalNodeNum == latestConfirmed we don't need to delete any siblings
+        while (curr != latestConfirmedNodeNum) {
+            if (curr == expectedPrev) {
+                INode currNode = getNode(curr);
+                expectedPrev = currNode.prev();
+            } else {
+                require(destroyAlternatives, "ALTERNATIVES_NOT_EXPECTED");
+                destroyNode(curr);
+                emit NodeDestroyedInMigration(curr);
+            }
+            curr--;
+        }
+
+        uint256 stakerCount = stakerCount();
+        address[] memory stakerAddresses = new address[](stakerCount);
+
+        // we separate the loop that gets staker addresses to be different from the loop that withdraw stakers
+        // since withdrawing stakers has side-effects on the array that is queried in `getStakerAddress`.
+        for (uint64 i = 0; i < stakerCount; ++i) {
+            stakerAddresses[i] = getStakerAddress(i);
+        }
+
+        for (uint64 i = 0; i < stakerCount; ++i) {
+            address stakerAddr = stakerAddresses[i];
+            address chall = currentChallenge(stakerAddr);
+
+            if (chall != address(0)) {
+                require(destroyChallenges, "CHALLENGE_NOT_EXPECTED");
+                address asserter = IChallenge(chall).asserter();
+                address challenger = IChallenge(chall).challenger();
+
+                clearChallenge(asserter);
+                clearChallenge(challenger);
+
+                IChallenge(chall).clearChallenge();
+                emit ChallengeDestroyedInMigration(chall);
+            }
+
+            if (getNode(latestStakedNode(stakerAddr)) == INode(0)) {
+                // this node got destroyed, so we force refund the staker
+                withdrawStaker(stakerAddr);
+                emit StakerWithdrawnInMigration(stakerAddr);
+            }
+            // else the staker can unstake and withdraw regularly using `returnOldDeposit`
+        }
+
+        shutdownForNitroBlock = block.number;
+        _pause();
+        emit OwnerFunctionCalled(25);
+    }
+
+    /// @dev stops the rollup from shutdownForNitro mode in case something goes wrong during the migration process
+    function undoShutdownForNitro() external whenPaused {
+        require(shutdownForNitroMode(), "NOT_SHUTDOWN_MODE");
+        shutdownForNitroBlock = type(uint256).max;
+        _unpause();
+        emit OwnerFunctionCalled(26);
+    }
+
+    /// @dev allows the admin to transfer the ownership of a contract controlled by the rollup
+    function transferOwnership(Ownable target, address newOwner) external {
+        target.transferOwnership(newOwner);
+        emit OwnerFunctionCalled(27);
+    }
+
+    function isNitroReady() external pure returns (uint256) {
+        return NitroReadyMagicNums.ROLLUP_ADMIN;
+    }
 }

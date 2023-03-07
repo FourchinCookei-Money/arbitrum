@@ -10,13 +10,17 @@ Arbitrum nodes support the [Ethereum JSON-RPC API](https://eth.wiki/json-rpc/API
 
 For Ethereum/Arbitrum "bridge" functionality — methods that involve communicating between the L1 Ethereum chain and the L2 Arbitrum chain (i.e., depositing and withdrawing assets), we provide our own libraries for convenience.
 
+## Demos
+
+See our [Tutorials](https://github.com/OffchainLabs/arbitrum-tutorials) repo for client-side integration demos.
+
 ## Arbitrum Integration
 
 #### Ethers.js
 
-Ethers-js can be used to interact with an Arbitrum chain exactly as one would use it to interact with Ethereum ([see docs](https://docs.ethers.io/v5/)); simply instantiate a provider connected to an Arbitrum node.
+[`ethers`](https://www.npmjs.com/package/ethers) can be used to interact with an Arbitrum chain exactly as one would use it to interact with Ethereum ([see docs](https://docs.ethers.io/v5/)); simply instantiate a provider connected to an Arbitrum node.
 
-I.e., with MetaMask already connected to an Arbitrum node via a custom RPC url:
+I.e., with your wallet already connected to an Arbitrum node via a custom RPC url:
 
 ```ts
 import * as ethers from 'ethers'
@@ -45,48 +49,24 @@ var arbWeb3Provider = new Web3('http://ArbNodeUrl.com')
 
 ## Arbitrum / Ethereum Bridge
 
-Accessing bridging methods can be done via our `arb-ts` library, or by simply connecting to the relevant contracts directly.
+Accessing bridging methods can be done via the `Arbitrum SDK`, or by simply connecting to the relevant contracts directly.
 
-#### 1. arb-ts
+#### Arbitrum SDK
 
 **Installation**:
 
 ```
-yarn add arb-ts ethers-js
+yarn add @arbitrum/sdk
 ```
 
-**Usage (with Ethers-js wallets/providers)**:
+**Usage (with Ethers wallets/providers)**:
 
 ```ts
-import { providers, Wallet } from 'ethers'
-import { Bridge } from 'arb-ts'
+import { getL2Network, EthBridger } from '@arbitrum/sdk'
 
-const l1Provider = new providers.JsonRpcProvider('http://EthNodeUrl.com')
-const l2Provider = new providers.JsonRpcProvider('http://ArbNodeUrl.com')
-
-const l1Signer = new Wallet('0xmyprivatekey!!', l1Provider)
-const l2Signer = new Wallet('0xmyprivatekey!!', l2Provider)
-
-const bridge = new Bridge(
-  '0xL1EthErc20BridgeAddress',
-  '0xl2ArbTokenBridgeAddress',
-  l1Signer,
-  l2Signer
+const l2Network = await getL2Network(
+  l2ChainID /** <-- chain id of target Arbitrum chain */
 )
+const ethBridger = new EthBridger(l2Network)
 ```
 
-See [library documentation here](https://arb-ts-docs.netlify.app/), or [tests](https://github.com/OffchainLabs/arbitrum/blob/develop/packages/arb-ts/integration_test/arb-bridge.test.ts) for sample usage.
-
-(Note that we've deprecated the old `arb-provider-ethers` library; arb-ts is the recommended replacement)
-
-#### 2. Alternative: Direct Contract Instantiation
-
-Typechain interfaces for all contracts listed above are made available via arb-ts. i.e.,
-
-```ts
-import { ArbSys__factory } from 'arb-ts'
-
-const arbSys = ArbSys__factory.connect(ARB_SYS_ADDRESS, l2Signer)
-
-arbSys.withdrawEth('0xmyaddress')
-```

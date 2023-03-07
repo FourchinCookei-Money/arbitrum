@@ -18,6 +18,7 @@
 
 pragma solidity ^0.6.11;
 
+import { NitroReadyMagicNums } from "./NitroMigratorUtil.sol";
 import "./Inbox.sol";
 import "./Outbox.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -25,6 +26,10 @@ import "@openzeppelin/contracts/utils/Address.sol";
 
 import "./interfaces/IBridge.sol";
 
+/**
+ * @notice DEPRECATED - only for classic version, see new repo (https://github.com/OffchainLabs/nitro/tree/master/contracts)
+ * for new updates
+ */
 contract Bridge is OwnableUpgradeable, IBridge {
     using Address for address;
     struct InOutInfo {
@@ -39,6 +44,8 @@ contract Bridge is OwnableUpgradeable, IBridge {
     address[] public allowedOutboxList;
 
     address public override activeOutbox;
+
+    // Accumulator for delayed inbox; tail represents hash of the current state; each element represents the inclusion of a new message.
     bytes32[] public override inboxAccs;
 
     function initialize() external initializer {
@@ -59,17 +66,35 @@ contract Bridge is OwnableUpgradeable, IBridge {
         bytes32 messageDataHash
     ) external payable override returns (uint256) {
         require(allowedInboxesMap[msg.sender].allowed, "NOT_FROM_INBOX");
-        uint256 count = inboxAccs.length;
-        bytes32 messageHash =
-            Messages.messageHash(
+        return
+            addMessageToInbox(
                 kind,
                 sender,
                 block.number,
                 block.timestamp, // solhint-disable-line not-rely-on-time
-                count,
                 tx.gasprice,
                 messageDataHash
             );
+    }
+
+    function addMessageToInbox(
+        uint8 kind,
+        address sender,
+        uint256 blockNumber,
+        uint256 blockTimestamp,
+        uint256 gasPrice,
+        bytes32 messageDataHash
+    ) internal returns (uint256) {
+        uint256 count = inboxAccs.length;
+        bytes32 messageHash = Messages.messageHash(
+            kind,
+            sender,
+            blockNumber,
+            blockTimestamp,
+            count,
+            gasPrice,
+            messageDataHash
+        );
         bytes32 prevAcc = 0;
         if (count > 0) {
             prevAcc = inboxAccs[count - 1];
@@ -88,13 +113,16 @@ contract Bridge is OwnableUpgradeable, IBridge {
         if (data.length > 0) require(destAddr.isContract(), "NO_CODE_AT_DEST");
         address currentOutbox = activeOutbox;
         activeOutbox = msg.sender;
+        // We set and reset active outbox around external call so activeOutbox remains valid during call
         (success, returnData) = destAddr.call{ value: amount }(data);
         activeOutbox = currentOutbox;
+        emit BridgeCallTriggered(msg.sender, destAddr, amount, data);
     }
 
     function setInbox(address inbox, bool enabled) external override onlyOwner {
         InOutInfo storage info = allowedInboxesMap[inbox];
         bool alreadyEnabled = info.allowed;
+        emit InboxToggle(inbox, enabled);
         if ((alreadyEnabled && enabled) || (!alreadyEnabled && !enabled)) {
             return;
         }
@@ -112,6 +140,7 @@ contract Bridge is OwnableUpgradeable, IBridge {
     function setOutbox(address outbox, bool enabled) external override onlyOwner {
         InOutInfo storage info = allowedOutboxesMap[outbox];
         bool alreadyEnabled = info.allowed;
+        emit OutboxToggle(outbox, enabled);
         if ((alreadyEnabled && enabled) || (!alreadyEnabled && !enabled)) {
             return;
         }
@@ -128,5 +157,13 @@ contract Bridge is OwnableUpgradeable, IBridge {
 
     function messageCount() external view override returns (uint256) {
         return inboxAccs.length;
+    }
+
+    function allowedOutboxListLength() external view returns (uint256) {
+        return allowedOutboxList.length;
+    }
+
+    function isNitroReady() external view override returns (uint256) {
+        return NitroReadyMagicNums.BRIDGE;
     }
 }
